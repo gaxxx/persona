@@ -1,0 +1,10 @@
+node_modules
+dist
+workspace
+store
+data
+groups
+.env
+*.log
+logs
+.git
