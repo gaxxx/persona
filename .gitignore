@@ -6,6 +6,7 @@ data/
 .claude/scheduled_tasks.lock
 .mcp.json
 TASK.md
+Obsidian
 
 # Per-user CLAUDE.md (template: CLAUDE.example.md)
 CLAUDE.md

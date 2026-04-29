@@ -14,6 +14,7 @@ RUN npm install -g @anthropic-ai/claude-code
 
 WORKDIR /workspace
 
+USER bun
 # Default to interactive Claude Code session.
 # docker compose run / exec will override as needed.
 CMD ["claude"]
