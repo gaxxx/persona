@@ -1,0 +1,10 @@
+node_modules
+data
+.env
+.git
+.DS_Store
+*.log
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+TASK.md
+CLAUDE.md

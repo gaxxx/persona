@@ -1,0 +1,22 @@
+services:
+  persona:
+    build: .
+    container_name: persona
+    env_file: .env
+    environment:
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      # Repo (read-write - assistant edits CLAUDE.md, conversations log, etc.)
+      - .:/workspace
+      # Obsidian vault - substitute <vault> wherever it appears in skills
+      - ${VAULT_PATH}:/vault
+      # Claude Code auth (carries claude.ai subscription session from host)
+      - ${HOME}/.claude:/root/.claude
+      # Persistent npm cache (gmail MCP via npx - auth state under here)
+      - persona-npm:/root/.npm
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+volumes:
+  persona-npm:

@@ -6,3 +6,12 @@ data/
 .claude/scheduled_tasks.lock
 .mcp.json
 TASK.md
+
+# Per-user CLAUDE.md (template: CLAUDE.example.md)
+CLAUDE.md
+
+# Private/personal skills (each user maintains their own; not shipped in template)
+.claude/skills/ds160/
+.claude/skills/game-time/
+.claude/skills/kb/
+.claude/skills/uscis-check/
