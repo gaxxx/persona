@@ -48,6 +48,27 @@ export async function sendMessage(chatId: number, text: string): Promise<void> {
   }
 }
 
+export async function sendPhoto(chatId: number, filePath: string, caption?: string): Promise<void> {
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("photo", Bun.file(filePath));
+  if (caption) form.append("caption", caption);
+  const res = await fetch(`${API}/sendPhoto`, { method: "POST", body: form });
+  const json = (await res.json()) as { ok: boolean; description?: string };
+  if (!json.ok) throw new Error(`Telegram sendPhoto: ${json.description}`);
+}
+
+export async function getFileUrl(fileId: string): Promise<string> {
+  const file = await callApi<{ file_path: string }>("getFile", { file_id: fileId });
+  return `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`;
+}
+
+export async function downloadFile(fileId: string, destPath: string): Promise<void> {
+  const url = await getFileUrl(fileId);
+  const res = await fetch(url);
+  await Bun.write(destPath, res);
+}
+
 // --- Markdown to Telegram HTML (adapted from ClaudeClaw) ---
 
 function markdownToTelegramHtml(text: string): string {
@@ -107,15 +128,21 @@ function markdownToTelegramHtml(text: string): string {
 
 // --- Types ---
 
+export interface TelegramMessage {
+  message_id: number;
+  from?: { id: number; first_name: string; username?: string; is_bot?: boolean };
+  chat: { id: number; type: string };
+  date: number;
+  text?: string;
+  caption?: string;
+  photo?: { file_id: string }[];
+  voice?: { file_id: string };
+  document?: { file_id: string; file_name?: string; mime_type?: string };
+  sticker?: { file_id: string; emoji?: string; is_animated?: boolean; is_video?: boolean };
+  reply_to_message?: TelegramMessage;
+}
+
 export interface TelegramUpdate {
   update_id: number;
-  message?: {
-    message_id: number;
-    from?: { id: number; first_name: string; username?: string };
-    chat: { id: number; type: string };
-    date: number;
-    text?: string;
-    photo?: { file_id: string }[];
-    voice?: { file_id: string };
-  };
+  message?: TelegramMessage;
 }

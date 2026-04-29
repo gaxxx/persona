@@ -4,7 +4,7 @@
  * Designed to be run via Claude Code's Monitor tool.
  * Each line of stdout is a JSON message that wakes the loop.
  */
-import { getUpdates, type TelegramUpdate } from "./lib/telegram";
+import { getUpdates, downloadFile, type TelegramUpdate } from "./lib/telegram";
 import { mkdirSync, existsSync } from "fs";
 
 const OFFSET_FILE = "data/tg-offset.json";
@@ -28,7 +28,34 @@ while (true) {
 
     for (const u of updates) {
       offset = u.update_id + 1;
-      if (!u.message?.text) continue;
+      if (!u.message) continue;
+
+      // Handle photo messages
+      if (u.message.photo && u.message.photo.length > 0) {
+        const largest = u.message.photo[u.message.photo.length - 1];
+        const photoPath = `data/photos/${u.message.message_id}.jpg`;
+        if (!existsSync("data/photos")) mkdirSync("data/photos", { recursive: true });
+        try {
+          await downloadFile(largest.file_id, photoPath);
+        } catch (err) {
+          console.error(`[tg-watch] photo download failed: ${(err as Error).message}`);
+        }
+
+        const msg = {
+          chat_id: u.message.chat.id,
+          from: u.message.from
+            ? `${u.message.from.first_name}${u.message.from.username ? ` (@${u.message.from.username})` : ""}`
+            : "unknown",
+          text: u.message.text || u.message.caption || "[photo]",
+          photo: photoPath,
+          date: new Date(u.message.date * 1000).toISOString(),
+          message_id: u.message.message_id,
+        };
+        console.log(JSON.stringify(msg));
+        continue;
+      }
+
+      if (!u.message.text) continue;
 
       const msg = {
         chat_id: u.message.chat.id,

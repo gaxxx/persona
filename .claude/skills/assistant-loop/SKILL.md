@@ -1,87 +1,116 @@
 ---
 name: assistant-loop
-description: Personal assistant main loop. Polls Telegram for messages and responds using available tools. Start with /loop to run the assistant.
+description: Personal assistant loop. Two contexts — Telegram I/O lives in the tg-daemon's claude subprocess; cron/heartbeat lives in the main Claude Code REPL. Consults CLAUDE.md for what to do; this skill handles how.
 ---
 
 # Assistant Loop
 
-You are running as a personal assistant. On first invocation, set up the watcher. On subsequent ticks (from Monitor events or ScheduleWakeup), process messages.
+The assistant runs in **two parallel contexts** that share the same filesystem and persona but talk to different audiences:
 
-## First Tick — Setup
+| Context | Scope | Started by |
+|---|---|---|
+| **Daemon** (`bin/tg-daemon.ts`) | Telegram I/O — receives Telegram messages and sends replies via a long-lived `claude -p --input-format stream-json` subprocess | `nohup bun run bin/tg-daemon.ts &` (manually or via launchd) |
+| **Main REPL** (this Claude Code session) | Cron-fired scheduled tasks (gmail digest, daily journal, morning brief) + daemon health heartbeat | User runs `/loop /assistant-loop` |
 
-1. Read `IDENTITY.md` and `USER.md` to know who you are and who you're helping.
+## Channel Discipline (information isolation)
 
-2. Start the Telegram watcher via Monitor (persistent):
+**Reply on the channel the request came in on.** Don't cross-post.
+
+- **Telegram message arrives** → daemon's claude subprocess replies on Telegram (`bun run bin/tg-send.ts <chat_id> "<msg>"`). Don't echo anything to the REPL.
+- **REPL command** typed by USER in this Claude Code session → reply only in REPL output. Do **not** send a Telegram message unless USER explicitly asks ("发到 telegram"/"tell me on telegram").
+- **Cron-fired tasks** (gmail digest, daily journal, morning brief) — push results to Telegram per their TASK.md prompt. REPL gets only a brief status line.
+- **Heartbeat ticks** — normally silent (just check daemon health + reschedule). **Send Telegram alert** when there's a real issue worth interrupting the user: daemon was dead and got restarted, daemon failed to restart, daemon hasn't processed any message in >1h despite Telegram updates being available, etc. Don't alert for routine ticks.
+
+When in doubt, prefer one channel — the one that originated the request.
+
+## Daemon — On Telegram Event
+
+The daemon feeds the claude subprocess one user turn per Telegram event. Event shape:
+
+```json
+{ "chat_id": ..., "from": "...", "text": "...",
+  "attachment": { "kind": "photo|document|sticker", "path": "data/attachments/...", "name": ..., "mime": ... } | undefined,
+  "reply_to": { "message_id": ..., "from_bot": bool, "text": "...", "attachment_kind": ..., "attachment_name": ... } | undefined,
+  "date": "...", "message_id": ... }
+```
+
+Steps when handling an event:
+
+1. Send typing indicator: `bun run bin/tg-typing.ts <chat_id>`
+2. **Log incoming** — append to `data/conversations/YYYY-MM-DD.md`.
+3. **Load conversation context** — read recent conversation files (today + recent days). If total < 10K chars include all; otherwise summarize older days and keep today verbatim.
+4. **If `attachment` set** — Read it via the Read tool (Read supports images and PDFs natively).
+5. **If `reply_to` set** — Use as context for what the user is responding to. If `reply_to.from_bot` is true, find that earlier message in `data/conversations/` for full context. If the replied-to had an attachment, look in `data/attachments/<reply_to.message_id>.*`.
+6. If onboarding not done (`USER.md` has "not set" fields) → run onboarding flow.
+7. **Check available skills and MCP tools.** Pick the best fit, or reply directly if none applies.
+8. Send: `bun run bin/tg-send.ts <chat_id> "<response>"`
+9. **Log outgoing** — append to today's conversation file.
+
+The daemon **only** owns Telegram. It does NOT start a Monitor, does NOT call `bin/tg-pull.ts`, and does NOT register crons.
+
+## Main REPL — First Tick
+
+1. **Verify daemon is running** — `pgrep -af tg-daemon.ts`. If down, start it:
    ```bash
-   bun run bin/tg-watch.ts
+   nohup bun run bin/tg-daemon.ts > /tmp/tg-daemon-stderr.log 2>&1 & disown
    ```
+   Wait ~6s, confirm via `grep "priming complete" /tmp/tg-daemon-stderr.log`.
 
-3. Process any queued messages:
-   ```bash
-   bun run bin/tg-pull.ts
-   ```
+2. **Re-arm pending reminders** — read `<vault>/persona/tasks.md` for incomplete tasks with future dates. `CronCreate` for time-specific ones. Send overdue ones immediately (via Telegram, since these are reminders aimed at the user) with a note.
 
-4. Schedule fallback heartbeat via ScheduleWakeup (1200s).
+3. **Register scheduled tasks** — read `TASK.md`. For each section, call `CronCreate` with cron + prompt. Check `CronList` first; skip duplicates (same prompt). TASK.md is the source of truth.
+
+4. Schedule fallback heartbeat via `ScheduleWakeup` (1200s).
+
+The main REPL does **not** poll Telegram, does **not** spawn tg-watch, and does **not** handle Telegram messages itself — those go to the daemon.
+
+## Main REPL — On ScheduleWakeup (heartbeat)
+
+1. `pgrep -af tg-daemon.ts`. If alive: just reschedule, no Telegram noise.
+2. If dead:
+   - Restart daemon (`nohup bun run bin/tg-daemon.ts ...`), wait for `priming complete`
+   - **Telegram alert** (single message): `🦌 daemon was down, restarted (PID <pid>)` — USER should know
+   - If restart fails (no priming after ~15s), Telegram: `⚠️ daemon failed to restart, manual intervention needed` + paste last 5 lines of `/tmp/tg-daemon-stderr.log`
+3. Reschedule heartbeat (1200s).
+
+## Main REPL — On Cron Fire
+
+Each cron's prompt is self-contained (see `TASK.md`). Run it. Cron tasks know whether to push results to Telegram (gmail digest, morning brief, daily journal all do) — follow their prompt. Don't add extra REPL chatter beyond a one-line completion status.
 
 ## Onboarding (first-time setup)
 
-If `USER.md` has "not set" fields, run this flow on the first Telegram message:
+Triggered on the first Telegram message when `USER.md` has "not set" fields:
 
-1. Greet the user warmly. Ask them to introduce themselves:
-   - Name, location, timezone, preferred language
-   - Or just let them write freely — extract the info from natural conversation
+1. Greet warmly. Ask them to introduce themselves: name, location, timezone, preferred language. Or let them write freely — extract from natural conversation.
+2. Update `USER.md` with what you learn (name, location, timezone, language, telegram chat_id).
+3. Fill in `IDENTITY.md` — pick a name, creature type, vibe, and emoji from conversation tone.
+4. Confirm naturally, then handle their original message (don't make them repeat).
 
-2. After getting their info, update `USER.md` with what you learned:
-   - Name, What to call them, Location, Timezone, Language, Telegram chat_id
-   - Fill in whatever they share. Don't push for everything at once.
+One or two questions max. Learn the rest over time.
 
-3. Also fill in `IDENTITY.md` — pick your own name, creature type, vibe, and emoji based on the conversation tone.
+## Conversation Log
 
-4. Confirm back naturally. Then handle their original message (don't make them repeat it).
+All Telegram messages and responses log to `data/conversations/YYYY-MM-DD.md`:
 
-Keep onboarding casual — don't interrogate. One or two questions max. Learn the rest over time.
+```
+[HH:MM] user: message text
+[HH:MM] bot: response text
+```
 
-## On Monitor Event (new Telegram message)
+The daemon writes both halves. The main REPL does NOT write to this file (REPL conversations are separate — they live in this Claude Code session's transcript and don't get logged).
 
-The event JSON contains: `chat_id`, `from`, `text`, `date`, `message_id`.
+## Telegram Commands (reference)
 
-1. Send typing indicator:
-   ```bash
-   bun run bin/tg-typing.ts <chat_id>
-   ```
+```bash
+bun run bin/tg-send.ts <chat_id> "<message>"   # send (used by daemon claude + cron tasks)
+bun run bin/tg-typing.ts <chat_id>             # typing indicator (daemon only)
+bun run bin/tg-daemon.ts                       # the daemon entry point itself
+```
 
-2. If onboarding not done (USER.md has "not set") → run onboarding flow.
-
-3. Decide what to do based on the message:
-   - **Calendar question** → use Google Calendar MCP tools
-   - **Email question** → use Gmail MCP tools
-   - **Notes/knowledge** → use Notion MCP tools
-   - **Task/reminder** → read and update `data/store.json`, confirm to user
-   - **Weather/location question** → use WebSearch, respect user's location from USER.md
-   - **Simple question** → answer directly
-   - **Casual chat** → respond naturally
-
-4. Send response:
-   ```bash
-   bun run bin/tg-send.ts <chat_id> "<response>"
-   ```
-
-5. Reschedule fallback heartbeat (1200s).
-
-**Always match the user's language** — detect from their message and from `USER.md`.
-
-## On ScheduleWakeup (fallback tick)
-
-Run `bun run bin/tg-pull.ts` to catch anything the Monitor missed. Process as above. Reschedule.
-
-## Memory
-
-- Update `USER.md` when you learn something new about the human
-- Update `IDENTITY.md` when you want to evolve your personality
-- Update `memory/projects.md` for project-related info
-- Use Claude Code's built-in memory for long-term recall
+`bin/tg-pull.ts` and `bin/tg-watch.ts` are legacy from the pre-daemon architecture. Don't use.
 
 ## Error Handling
 
-- If a script fails, log the error and continue
-- Never let an error stop the loop — always reschedule
+- If a script fails, log the error and continue. Never let an error stop the loop — always reschedule the heartbeat.
+- If the daemon's claude subprocess dies mid-turn, the daemon respawns it and re-sends the priming.
+- If the daemon itself dies, the heartbeat will detect via `pgrep` and restart.
