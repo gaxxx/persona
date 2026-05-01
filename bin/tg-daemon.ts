@@ -6,8 +6,8 @@
  * `bun run bin/tg-send.ts`, logs conversations). The daemon is just plumbing.
  *
  * Stream-json envelopes (confirmed by manual probe):
- *   stdin  → {"type":"user","message":{"role":"user","content":"<text>"}}\n
- *   stdout → NDJSON, multiple events per turn. Notable types:
+ *   stdin  -> {"type":"user","message":{"role":"user","content":"<text>"}}\n
+ *   stdout -> NDJSON, multiple events per turn. Notable types:
  *              system/init, rate_limit_event, assistant, result/<subtype>
  *            A `{type:"result"}` event marks turn completion. session_id is
  *            preserved across turns within one subprocess.
@@ -51,15 +51,15 @@ const PRIMING = `You are a personal assistant running inside a long-lived daemon
 Each user turn I send you is one Telegram event in this exact form:
   [Telegram event] {"chat_id":..., "from":"...", "text":"...", "attachment":{kind,path,name?,mime?}|undefined, "date":"...", "message_id":...}
 
-If \`attachment\` is set, the user attached a file. \`kind\` is "photo" / "document" / "sticker". \`path\` is a relative path under data/attachments/. Read it with the Read tool — Read supports images and PDFs natively. Stickers may be webp/tgs/webm; for tgs/webm just acknowledge the sticker (use \`name\` if it's an emoji). \`text\` is caption or a placeholder if none.
+If \`attachment\` is set, the user attached a file. \`kind\` is "photo" / "document" / "sticker". \`path\` is a relative path under data/attachments/. Read it with the Read tool - Read supports images and PDFs natively. Stickers may be webp/tgs/webm; for tgs/webm just acknowledge the sticker (use \`name\` if it's an emoji). \`text\` is caption or a placeholder if none.
 
-If \`reply_to\` is set, the user is replying to an earlier message. Use it as context for what they're responding to. If \`reply_to.from_bot\` is true, that prior message was from you — find it in data/conversations/YYYY-MM-DD.md to recover full context. If the replied-to had an attachment that was previously processed by this daemon, the file is at data/attachments/<reply_to.message_id>.* — Read it if relevant.
+If \`reply_to\` is set, the user is replying to an earlier message. Use it as context for what they're responding to. If \`reply_to.from_bot\` is true, that prior message was from you - find it in data/conversations/YYYY-MM-DD.md to recover full context. If the replied-to had an attachment that was previously processed by this daemon, the file is at data/attachments/<reply_to.message_id>.* - Read it if relevant.
 
 Read CLAUDE.md (in cwd) for behaviour. Use the assistant-loop skill mechanics:
 read identity/user/conversation context, route to skills/MCP tools, reply via
 \`bun run bin/tg-send.ts <chat_id> "<msg>"\`, log to data/conversations/YYYY-MM-DD.md.
 
-Do NOT start a Monitor or any watcher — the daemon owns Telegram polling.
+Do NOT start a Monitor or any watcher - the daemon owns Telegram polling.
 Do NOT call tg-pull.ts.
 
 Acknowledge with the single word READY.`;
@@ -276,7 +276,7 @@ while (!stopping) {
       date: new Date(m.date * 1000).toISOString(),
       message_id: m.message_id,
     };
-    log("→ telegram event", event);
+    log("-> telegram event", event);
     try {
       await claude.enqueue(`[Telegram event] ${JSON.stringify(event)}`);
     } catch (err) {

@@ -19,11 +19,11 @@ Universal contract for storing and querying personal data. Other skills should c
 
 `/kb <anything-else>` routes to the user's implementation skill at `<vault>/persona/skills/kb-impl/`. Common ops in this user's PARA + Obsidian impl:
 
-- `/kb ingest` — process `<vault>/raw/` inbox
-- `/kb plan` — OKR / goals management
-- `/kb clip <url>` — clip a YouTube video into raw/
-- `/kb improve` — multi-agent QA loop
-- `/kb test` — redirects to `/assistant-test`
+- `/kb ingest` - process `<vault>/raw/` inbox
+- `/kb plan` - OKR / goals management
+- `/kb clip <url>` - clip a YouTube video into raw/
+- `/kb improve` - multi-agent QA loop
+- `/kb test` - redirects to `/assistant-test`
 
 To see what your impl supports: `cat <vault>/persona/skills/kb-impl/SKILL.md`.
 

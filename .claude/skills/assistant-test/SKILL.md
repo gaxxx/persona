@@ -22,7 +22,7 @@ Test routing accuracy and response quality across all skills.
 
 Tests live in `<vault>/persona/tests/cases.md` (editable in Obsidian as markdown tables).
 
-Cases are grouped under `## <Section>` headings (e.g. `## Game Time`, `## KB — Immigration`). Each section contains a markdown table with columns: `ID | Input | Skill | Expect Contains | Tags`.
+Cases are grouped under `## <Section>` headings (e.g. `## Game Time`, `## KB - Immigration`). Each section contains a markdown table with columns: `ID | Input | Skill | Expect Contains | Tags`.
 
 Parse the tables to extract test cases. `Expect Contains` and `Tags` are comma-separated; an empty `Expect Contains` cell means skip the content check.
 
@@ -62,13 +62,13 @@ Read `<vault>/persona/tests/cases.md`. Walk every `##` section; for each, parse 
 1. Do the routing test above
 2. Actually execute the skill (read kb articles, check game-time data, etc.)
 3. Generate the response (but do NOT send to Telegram)
-4. Check `expect_contains` — all listed strings must appear in the response
+4. Check `expect_contains` - all listed strings must appear in the response
 5. Record: PASS/FAIL with evidence
 
 **Token tracking:**
 - Before each test, note the conversation position
 - After each test, estimate tokens used:
-  - Input: count characters of all files read × 0.3 (rough char→token ratio)
+  - Input: count characters of all files read × 0.3 (rough char->token ratio)
   - Output: count characters of response × 0.3
 - Record in results
 
@@ -80,15 +80,15 @@ Assistant Test Results
 Ran 15 tests (10 routing, 5 quality)
 
 Routing:
-✓  1. "黑皮工作1小时" → game-time — PASS
-✓  2. "查余额" → game-time — PASS
-✓  3. "我的护照号码是多少" → kb — PASS
-✗  5. "明天有什么安排" → calendar — FAIL (got: direct)
-✓ 10. "你好" → direct — PASS
+   1. "黑皮工作1小时" -> game-time - PASS
+   2. "查余额" -> game-time - PASS
+   3. "我的护照号码是多少" -> kb - PASS
+x  5. "明天有什么安排" -> calendar - FAIL (got: direct)
+  10. "你好" -> direct - PASS
 
 Quality:
-✓  3. "我的护照号码是多少" → contains "<passport-number>" — PASS
-✗ 12. "<name> 的 EAD 批了吗" → missing "批准" — FAIL
+   3. "我的护照号码是多少" -> contains "<passport-number>" - PASS
+x 12. "<name> 的 EAD 批了吗" -> missing "批准" - FAIL
 
 Results: 13 passed, 2 failed
 Token estimate: ~12K input, ~3K output (15 tests)
@@ -157,13 +157,13 @@ All tests run in **dry run mode**:
 ## Comparing Runs
 
 `/test stats` reads the two most recent results files and shows:
-- Tests that flipped (pass→fail or fail→pass)
+- Tests that flipped (pass->fail or fail->pass)
 - Token usage changes
 - New failures to investigate
 
 ## Integration with KB Tests
 
-KB content-accuracy tests are filed in `cases.md` under the `## KB — <topic>` sections (tagged `kb`). This unified test suite covers the full assistant pipeline: routing → skill execution → response quality.
+KB content-accuracy tests are filed in `cases.md` under the `## KB - <topic>` sections (tagged `kb`). This unified test suite covers the full assistant pipeline: routing -> skill execution -> response quality.
 
 - `/assistant-test routing` = "does the assistant pick the right skill?"
 - `/assistant-test quality` = "does the response contain the key facts?"

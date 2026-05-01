@@ -120,7 +120,7 @@ function nextFire(fields: CronFields, from: Date): Date {
     }
     d.setMinutes(d.getMinutes() + 1);
   }
-  throw new Error("no fire within 1 year — cron expression unreachable?");
+  throw new Error("no fire within 1 year - cron expression unreachable?");
 }
 
 // ---- Scheduling -----------------------------------------------------------

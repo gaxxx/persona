@@ -84,7 +84,7 @@ while (true) {
         message_id: u.message.message_id,
       };
 
-      // Each line wakes the Monitor → wakes the loop
+      // Each line wakes the Monitor -> wakes the loop
       console.log(JSON.stringify(msg));
     }
 

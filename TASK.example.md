@@ -1,4 +1,4 @@
-# TASK.md — Scheduled Tasks
+# TASK.md - Scheduled Tasks
 
 Source of truth for recurring tasks. The `bin/cron-daemon.ts` process reads this file, schedules each section by its `Cron:` expression, and on fire spawns a one-shot `claude -p --permission-mode bypassPermissions` to execute the prompt. Auto-reloads on file change (fs.watch). Each task self-updates its own **Last run** line when it fires.
 
@@ -6,7 +6,7 @@ Source of truth for recurring tasks. The `bin/cron-daemon.ts` process reads this
 
 ## example-task
 
-- **Cron:** `13,43 7-22 * * *` (every 30 min, 7am–11pm local)
+- **Cron:** `13,43 7-22 * * *` (every 30 min, 7am-11pm local)
 - **Durable:** true
 - **Purpose:** One-line summary of what this task does.
 - **Last run:** never
