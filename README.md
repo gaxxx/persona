@@ -25,7 +25,24 @@ Skills split into two layers:
 
 ## Setup
 
-See [SETUP.md](./SETUP.md). Short version: copy `.env.example` to `.env`, point `VAULT_PATH` at any folder you'll treat as your vault, copy the minimal `kb-impl` example into the vault, then `docker compose up -d --build`.
+See [SETUP.md](./SETUP.md). Short version:
+
+```bash
+cp .env.example .env            # set TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, VAULT_PATH, TZ
+cp CLAUDE.example.md CLAUDE.md  # gitignored; tweak if you want
+cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/persona/skills/kb-impl"
+./bin/link-personal-skills.sh
+docker compose up -d --build
+```
+
+`docker compose up` only starts the container - it does **not** start the assistant. You have to attach and kick off the loop yourself:
+
+```bash
+docker compose exec persona claude       # first time: run /login inside
+docker compose exec persona claude /assistant-loop
+```
+
+`/assistant-loop` boots the tg-daemon and cron-daemon and keeps a heartbeat on both. After that, message your bot.
 
 ## Why a separate repo per user
 
