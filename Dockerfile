@@ -10,12 +10,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Claude Code CLI
-RUN npm install -g @anthropic-ai/claude-code
+# Claude Code CLI - native binary install. Symlink into /usr/local/bin so the
+# launcher is on PATH for any user; ENV keeps /root/.local/bin first for the
+# auto-update mechanism to find its own assets.
+RUN curl -fsSL https://claude.ai/install.sh | bash \
+    && ln -sf /root/.local/bin/claude /usr/local/bin/claude
+
+ENV PATH="/root/.local/bin:${PATH}"
 
 WORKDIR /workspace
 
-USER bun
-# Default to interactive Claude Code session.
-# docker compose run / exec will override as needed.
+# Container runs as root so the docker-compose mount of ~/.claude -> /root/.claude
+# (which carries the host's claude.ai subscription session) lines up.
 CMD ["claude"]
