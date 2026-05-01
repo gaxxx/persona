@@ -75,7 +75,7 @@ If `<vault>/persona/.claude/skills/kb-impl/` is missing:
 ./bin/link-skills.sh
 ```
 
-First-run behavior: copies each template from `share/skills/` (assistant-loop, assistant-test, kb) into the vault as a real dir, then symlinks every vault skill back into `.claude/skills/<name>`. The tracked `.claude/skills/setup/` (where this skill lives) is intentionally not shadowed. Show the output verbatim.
+First-run behavior: for each skill in `share/skills/` (assistant-loop, assistant-test, kb), copy it into the vault as a real dir, then symlink that vault copy back into `.claude/skills/<name>`. The script doesn't touch personal skills - those are the user's to manage. Show the output verbatim.
 
 ### 6. Final check + next step
 
