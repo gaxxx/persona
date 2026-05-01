@@ -144,6 +144,8 @@ function scheduleNext(s: Scheduled) {
   log(`scheduled ${s.task.id} -> ${next.toISOString()} (in ${Math.round(ms / 1000)}s)`);
 }
 
+const RUN_LOG_DIR = resolve(ROOT, "data/cron-runs");
+
 async function fireTask(s: Scheduled) {
   s.timer = undefined;
   if (s.running) {
@@ -154,6 +156,13 @@ async function fireTask(s: Scheduled) {
   s.running = true;
   log(`fire ${s.task.id}`);
   const start = Date.now();
+
+  // Per-fire log files so subprocess output is recoverable for debugging.
+  if (!existsSync(RUN_LOG_DIR)) mkdirSync(RUN_LOG_DIR, { recursive: true });
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const stdoutPath = resolve(RUN_LOG_DIR, `${s.task.id}-${ts}.stdout.log`);
+  const stderrPath = resolve(RUN_LOG_DIR, `${s.task.id}-${ts}.stderr.log`);
+
   try {
     const proc = Bun.spawn(
       [
@@ -166,14 +175,24 @@ async function fireTask(s: Scheduled) {
       {
         cwd: ROOT,
         env: { ...process.env },
-        stdout: "pipe",
-        stderr: "pipe",
+        stdout: Bun.file(stdoutPath),
+        stderr: Bun.file(stderrPath),
         stdin: "ignore",
       },
     );
     const [exitCode] = await Promise.all([proc.exited]);
     const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-    log(`done ${s.task.id} exit=${exitCode} in ${elapsed}s`);
+    // Tail of stdout (last ~400 chars) into cron.log for quick scanning.
+    let tail = "";
+    try {
+      const text = await Bun.file(stdoutPath).text();
+      tail = text.trim().slice(-400);
+    } catch {}
+    log(
+      `done ${s.task.id} exit=${exitCode} in ${elapsed}s` +
+        ` -- log:${stdoutPath}` +
+        (tail ? `\n  tail: ${tail.replace(/\n/g, "\n        ")}` : "")
+    );
   } catch (err) {
     log(`ERROR ${s.task.id}: ${(err as Error).message}`);
   } finally {
