@@ -38,3 +38,14 @@ To see what your impl supports: `cat <vault>/.claude/skills/kb-impl/SKILL.md`.
 This file is a stub. Concrete behavior comes from `<vault>/.claude/skills/kb-impl/SKILL.md` (and its `references/`). The `bin/link-personal-skills.sh` script symlinks the vault's `kb-impl` into this repo's `.claude/skills/` so Claude Code sees both the interface and the implementation.
 
 If `kb-impl/` is missing on disk, `/kb <subcommand>` (other than the documented core 3) should respond: "kb implementation skill is not installed; configure `<vault>/.claude/skills/kb-impl/` per SETUP.md".
+
+## Starting from scratch
+
+A minimal flat-folder example implementation lives at [`examples/minimal/SKILL.md`](examples/minimal/SKILL.md). Copy it to your vault to get started:
+
+```bash
+cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/.claude/skills/kb-impl"
+./bin/link-personal-skills.sh
+```
+
+Then edit the copy to fit your workflow (PARA, tagging, sibling folders, Dataview, ... whatever you like).
