@@ -22,6 +22,20 @@ const OFFSET_FILE = "data/tg-offset.json";
 const LOG_FILE = "data/daemon.log";
 const LONG_POLL_TIMEOUT = 25;
 
+// Allowlist: only accept messages from these chat IDs. Set TELEGRAM_CHAT_ID
+// (single id) or TELEGRAM_CHAT_IDS (comma-separated). Empty = reject everything.
+const ALLOWED_CHAT_IDS = new Set(
+  (process.env.TELEGRAM_CHAT_IDS ?? process.env.TELEGRAM_CHAT_ID ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map(Number),
+);
+if (ALLOWED_CHAT_IDS.size === 0) {
+  console.error("FATAL: TELEGRAM_CHAT_ID (or TELEGRAM_CHAT_IDS) is not set. Refusing to start without a chat allowlist.");
+  process.exit(1);
+}
+
 if (!existsSync("data")) mkdirSync("data", { recursive: true });
 
 function log(...parts: unknown[]) {
@@ -32,7 +46,7 @@ function log(...parts: unknown[]) {
 
 // ---- Claude subprocess ----------------------------------------------------
 
-const PRIMING = `You are USER's personal assistant running inside a long-lived daemon process.
+const PRIMING = `You are a personal assistant running inside a long-lived daemon process. Read CLAUDE.md and <vault>/persona/USER.md to learn who your human is.
 
 Each user turn I send you is one Telegram event in this exact form:
   [Telegram event] {"chat_id":..., "from":"...", "text":"...", "attachment":{kind,path,name?,mime?}|undefined, "date":"...", "message_id":...}
@@ -185,6 +199,12 @@ while (!stopping) {
     offset = u.update_id + 1;
     const m = u.message;
     if (!m) continue;
+    // Allowlist: drop messages from chat ids we don't recognize. We still
+    // advance the offset (above) so unauthorized senders can't backlog us.
+    if (!ALLOWED_CHAT_IDS.has(m.chat.id)) {
+      log("rejected: chat_id", m.chat.id, "from", m.from?.username ?? m.from?.first_name ?? "?");
+      continue;
+    }
     const hasPhoto = !!(m.photo && m.photo.length > 0);
     const hasDoc = !!m.document;
     const hasSticker = !!m.sticker;

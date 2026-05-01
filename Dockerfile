@@ -5,6 +5,7 @@ FROM oven/bun:1-debian
 # + tzdata (cron prompts assume a specific TZ)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl ca-certificates gnupg git tzdata \
+        procps strace lsof \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*

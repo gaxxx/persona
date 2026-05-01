@@ -10,6 +10,18 @@ import { mkdirSync, existsSync } from "fs";
 const OFFSET_FILE = "data/tg-offset.json";
 const POLL_INTERVAL = 5_000; // 5 seconds
 
+const ALLOWED_CHAT_IDS = new Set(
+  (process.env.TELEGRAM_CHAT_IDS ?? process.env.TELEGRAM_CHAT_ID ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map(Number),
+);
+if (ALLOWED_CHAT_IDS.size === 0) {
+  console.error("FATAL: TELEGRAM_CHAT_ID (or TELEGRAM_CHAT_IDS) is not set. Refusing to start without a chat allowlist.");
+  process.exit(1);
+}
+
 if (!existsSync("data")) mkdirSync("data", { recursive: true });
 
 // Read last offset
@@ -29,6 +41,11 @@ while (true) {
     for (const u of updates) {
       offset = u.update_id + 1;
       if (!u.message) continue;
+      // Allowlist: drop messages from chat ids we don't recognize.
+      if (!ALLOWED_CHAT_IDS.has(u.message.chat.id)) {
+        console.error(`[tg-watch] rejected chat_id=${u.message.chat.id} from=${u.message.from?.username ?? u.message.from?.first_name ?? "?"}`);
+        continue;
+      }
 
       // Handle photo messages
       if (u.message.photo && u.message.photo.length > 0) {

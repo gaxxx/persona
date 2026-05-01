@@ -4,6 +4,18 @@ import { mkdirSync, existsSync } from "fs";
 
 const OFFSET_FILE = "data/tg-offset.json";
 
+const ALLOWED_CHAT_IDS = new Set(
+  (process.env.TELEGRAM_CHAT_IDS ?? process.env.TELEGRAM_CHAT_ID ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map(Number),
+);
+if (ALLOWED_CHAT_IDS.size === 0) {
+  console.error("FATAL: TELEGRAM_CHAT_ID (or TELEGRAM_CHAT_IDS) is not set. Refusing to start without a chat allowlist.");
+  process.exit(1);
+}
+
 // Ensure data dir exists
 if (!existsSync("data")) mkdirSync("data", { recursive: true });
 
@@ -19,9 +31,9 @@ try {
 // Pull updates (short timeout since loop controls pacing)
 const updates = await getUpdates(offset, 5);
 
-// Extract messages
+// Extract messages (allowlist applied)
 const messages = updates
-  .filter((u: TelegramUpdate) => u.message?.text)
+  .filter((u: TelegramUpdate) => u.message?.text && ALLOWED_CHAT_IDS.has(u.message.chat.id))
   .map((u: TelegramUpdate) => ({
     chat_id: u.message!.chat.id,
     from: u.message!.from
