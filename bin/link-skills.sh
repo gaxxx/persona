@@ -1,19 +1,32 @@
 #!/bin/bash
 # Wire up the .claude/skills/ directory.
 #
-# Layout (vault is the source of truth):
-#   <vault>/persona/.claude/skills/      <- real dir; holds personal skills + symlinks to repo's generic skills
+# Layout (vault is the source of truth, fully self-contained):
+#   <vault>/persona/.claude/skills/      <- real dir; holds all your skills (real dirs)
 #   <repo>/.claude/skills                <- symlink -> <vault>/persona/.claude/skills/
 #   <repo>/share/skills/<name>/          <- generic skills shipped with the repo
 #
-# Idempotent. Run after `git clone`, after switching vaults, or whenever a
-# generic skill is added or removed in share/skills/.
+# On first run, generic skills are *copied* into the vault (not symlinked) so
+# you own your copy and can edit freely. Existing skills in the vault are
+# left alone unless `--update` is passed (which forces a re-copy from share/).
 #
-# Reads VAULT_PATH from .env (or first arg).
+# Idempotent. Run after `git clone`, after switching vaults, or with --update
+# after pulling repo changes you want to apply to your vault.
+#
+# Reads VAULT_PATH from .env (or first positional arg after flags).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 REPO_ROOT="$(pwd)"
+
+UPDATE=0
+ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --update|-u) UPDATE=1 ;;
+    *) ARGS+=("$a") ;;
+  esac
+done
 
 if [ -f .env ]; then
   set -a
@@ -22,7 +35,7 @@ if [ -f .env ]; then
   set +a
 fi
 
-VAULT_PATH="${VAULT_PATH:-${1:-}}"
+VAULT_PATH="${VAULT_PATH:-${ARGS[0]:-}}"
 if [ -z "$VAULT_PATH" ]; then
   echo "FATAL: VAULT_PATH not set (in .env or as arg)" >&2
   exit 1
@@ -51,34 +64,41 @@ else
   echo "linked .claude/skills -> $VAULT_SKILLS"
 fi
 
-# 2. Seed the vault with symlinks back to each generic skill in share/skills/.
-#    Real dirs in the vault (= personal skills) are left alone.
-linked=0
+# 2. Copy each shipped skill from share/skills/ into the vault (only if missing,
+#    or if --update). Existing real dirs are treated as the user's working copy
+#    and skipped. Stale symlinks (from the old layout) are replaced with copies.
+copied=0
+updated=0
 skipped=0
 if [ -d "$SHARE" ]; then
   for src in "$SHARE"/*/; do
     [ -d "$src" ] || continue
     name="$(basename "$src")"
     dst="$VAULT_SKILLS/$name"
-    target="${src%/}"
     if [ -L "$dst" ]; then
-      current="$(readlink "$dst")"
-      if [ "$current" != "$target" ]; then
-        ln -sfn "$target" "$dst"
-        echo "relinked $name -> $target"
-        linked=$((linked + 1))
+      # Old symlink-back layout - replace with a copy.
+      rm "$dst"
+      cp -R "${src%/}" "$dst"
+      echo "migrated $name (symlink -> real copy)"
+      copied=$((copied + 1))
+    elif [ -e "$dst" ]; then
+      if [ "$UPDATE" -eq 1 ]; then
+        rm -rf "$dst"
+        cp -R "${src%/}" "$dst"
+        echo "updated $name (overwritten from share/skills/)"
+        updated=$((updated + 1))
       else
         skipped=$((skipped + 1))
       fi
-    elif [ -e "$dst" ]; then
-      echo "SKIP $name (real dir/file at $dst; not overwriting personal skill)" >&2
-      skipped=$((skipped + 1))
     else
-      ln -s "$target" "$dst"
-      echo "linked $name -> $target"
-      linked=$((linked + 1))
+      cp -R "${src%/}" "$dst"
+      echo "installed $name"
+      copied=$((copied + 1))
     fi
   done
 fi
 
-echo "done: linked $linked, skipped $skipped"
+echo "done: copied $copied, updated $updated, skipped $skipped"
+if [ "$UPDATE" -eq 0 ] && [ "$skipped" -gt 0 ]; then
+  echo "(re-run with --update to overwrite skipped skills with the share/skills/ version)"
+fi

@@ -12,7 +12,7 @@ Three independent processes talk to a shared filesystem + persona:
 
 Skills are split into two layers:
 - **Generic** (this repo): `assistant-loop`, `assistant-test`, `kb` interface stub.
-- **Personal** (your vault, symlinked into the repo): `kb-impl` (your knowledge-base implementation), plus anything else like `game-time`, `ds160`, etc.
+- **Personal** (your vault): `kb-impl` (your knowledge-base implementation), plus anything else like `game-time`, `ds160`, etc. The vault dir is exposed to the repo via a single `.claude/skills` symlink.
 
 ## Prerequisites
 
@@ -77,7 +77,7 @@ docker compose exec persona claude /assistant-loop
 | Personal config | repo (gitignored) | `.env`, `CLAUDE.md`, `TASK.md` | no |
 | Personal skills | `<vault>/persona/.claude/skills/` | `kb-impl`, plus anything you write | no (vault is yours) |
 
-The repo's `.claude/skills` directory is a single symlink to `<vault>/persona/.claude/skills/`, created by `bin/link-skills.sh`. Generic skills from `share/skills/` are symlinked into the vault directory so Claude Code sees both layers mixed under `.claude/skills/`. Idempotent - re-run if you add a generic skill or switch vaults.
+The repo's `.claude/skills` directory is a single symlink to `<vault>/persona/.claude/skills/`, created by `bin/link-skills.sh`. On first run, the script also **copies** each generic skill from `share/skills/` into the vault, so your vault becomes the working copy and you can edit any skill freely. Re-run with `--update` to pull in repo-side changes (overwrites your edits, so review first).
 
 To add a new personal skill, just create it directly:
 ```bash
@@ -149,9 +149,9 @@ repo/
 ├── persona/
 │   ├── IDENTITY.md / USER.md / MEMORY.md / tasks.md
 │   ├── tests/cases.md          # /assistant-test cases
-│   └── .claude/skills/         # all your skills - personal real dirs +
-│       ├── kb-impl/            # symlinks back to <repo>/share/skills/*
-│       ├── assistant-loop@     # (symlink to repo)
+│   └── .claude/skills/         # all your skills as real dirs - personal +
+│       ├── kb-impl/            # copies of generic skills from share/skills/
+│       ├── assistant-loop/     # (edit any of these freely; they're yours)
 │       ├── ...
 ├── raw/                        # /kb ingest inbox
 └── kb/ ...                     # whatever your kb-impl writes

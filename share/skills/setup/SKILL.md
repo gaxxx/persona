@@ -75,7 +75,7 @@ If `<vault>/persona/.claude/skills/kb-impl/` is missing:
 ./bin/link-skills.sh
 ```
 
-This makes `.claude/skills` a symlink to `<vault>/persona/.claude/skills/`, then seeds that directory with symlinks back to each generic skill in `share/skills/`. Show the output verbatim.
+This makes `.claude/skills` a symlink to `<vault>/persona/.claude/skills/`, then **copies** each generic skill from `share/skills/` into the vault on first run. After that, the vault is the user's working copy - they can edit those skills freely. Show the output verbatim.
 
 ### 6. Final check + next step
 
@@ -98,9 +98,10 @@ If they're already inside the running container, skip the docker lines and just 
 
 `/setup` is idempotent. Common re-run scenarios:
 
-- **Switching vaults**: edit `VAULT_PATH` in `.env`, re-run `/setup`. It re-mkdirs the new vault skeleton and re-links skills.
-- **Added a new generic skill in `share/skills/`**: re-run just `./bin/link-skills.sh` (no need for full setup).
-- **Authored a personal skill** (a real dir under `<vault>/persona/.claude/skills/<name>/`): nothing to link - it's already visible via the master symlink.
+- **Switching vaults**: edit `VAULT_PATH` in `.env`, re-run `/setup`. It re-mkdirs the new vault skeleton and copies skills into it.
+- **Added a new generic skill in `share/skills/`**: re-run just `./bin/link-skills.sh` (it installs missing skills, leaves existing ones alone).
+- **Pulled repo updates and want them in the vault**: run `./bin/link-skills.sh --update`. This overwrites your vault copies with the share/skills/ versions - any local edits will be lost, so review first.
+- **Authored a personal skill** (a real dir under `<vault>/persona/.claude/skills/<name>/`): nothing to do - it's already visible via the master symlink.
 - **Rotated bot token**: edit `TELEGRAM_BOT_TOKEN` in `.env`, re-run `/setup` - it re-validates.
 
 When re-running, default to "skip if exists" - only ask before overwriting if the user explicitly said they want to redo something.
