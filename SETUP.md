@@ -79,7 +79,7 @@ docker compose exec persona claude /assistant-loop
 
 `.claude/skills/setup/` is the only skill tracked directly in the repo, so `/setup` works the moment you `git clone` (no symlinks required yet). On first run, `bin/link-skills.sh` does two things:
 
-1. **Copies** each generic template from `share/skills/` (assistant-loop, assistant-test, kb) into `<vault>/persona/.claude/skills/` as a real dir. Your vault becomes the working copy - edit freely. Re-run with `--update` to pull in repo-side changes (overwrites local edits, so review first).
+1. **Copies** each generic template from `share/skills/` (assistant-loop, assistant-test, kb) into `<vault>/persona/.claude/skills/` as a real dir. Your vault becomes the working copy - edit freely. Every subsequent run diffs each shared skill against `share/skills/` and asks y/N before overwriting if they differ; in-sync skills stay quiet.
 2. **Symlinks** every skill in the vault into `.claude/skills/<name>` so Claude Code sees them alongside the tracked `setup`.
 
 To add a new personal skill, drop it in the vault and re-link:
