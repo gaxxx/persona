@@ -20,8 +20,8 @@ Three independent processes talk to a shared filesystem and persona config:
 - The interactive REPL you `claude` into - heartbeat checks on the two daemons and ad-hoc work.
 
 Skills split into two layers:
-- **Generic** (this repo, tracked): `assistant-loop`, `assistant-test`, `kb` interface stub.
-- **Personal** (your vault, gitignored, symlinked back via `bin/link-personal-skills.sh`): your `kb-impl`, plus anything else you write.
+- **Generic** (this repo, tracked at `share/skills/`): `assistant-loop`, `assistant-test`, `kb` interface stub, `setup`.
+- **Personal** (your vault at `<vault>/persona/.claude/skills/`, gitignored): `kb-impl`, plus anything else you write. The repo's `.claude/skills` is a symlink to that vault directory, so personal and generic skills appear mixed to Claude Code.
 
 ## Setup
 
@@ -30,7 +30,7 @@ git clone <repo-url> persona && cd persona
 claude                # then type:  /setup
 ```
 
-`/setup` is an interactive wizard - it walks through `.env`, validates your Telegram bot token, sends a test message to your chat_id, provisions the vault skeleton, copies the starter `kb-impl`, and links personal skills. Idempotent; safe to re-run.
+`/setup` is an interactive wizard - it walks through `.env`, validates your Telegram bot token, sends a test message to your chat_id, provisions the vault skeleton, copies the starter `kb-impl`, and wires up `.claude/skills` as a symlink to the vault. Idempotent; safe to re-run.
 
 After `/setup` finishes:
 

@@ -11,12 +11,9 @@ Obsidian
 # Per-user CLAUDE.md (template: CLAUDE.example.md)
 CLAUDE.md
 
-# Private/personal skills - symlinked from <vault>/.claude/skills/ via bin/link-personal-skills.sh.
-# Pattern matches both real dirs and symlinks. Repo ships generic skills (assistant-loop, assistant-test, kb interface stub).
-.claude/skills/ds160
-.claude/skills/game-time
-.claude/skills/kb-impl
-.claude/skills/uscis-check
+# .claude/skills is a symlink to <vault>/persona/.claude/skills/ created by
+# bin/link-skills.sh. Generic skills live in share/skills/ and are tracked.
+.claude/skills
 
 # Editor swap files
 *.swp

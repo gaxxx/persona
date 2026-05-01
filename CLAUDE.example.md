@@ -24,9 +24,9 @@ When a message arrives, check available skills and MCP tools, decide which one f
 
 ## Knowledge Base
 
-Personal data goes through the `/kb` skill, which is an **interface**: required ops `put`/`query`/`lint` are universal; everything else (`ingest`, `plan`, `clip`, ...) is implementation-defined and lives at `<vault>/persona/skills/kb-impl/`.
+Personal data goes through the `/kb` skill, which is an **interface**: required ops `put`/`query`/`lint` are universal; everything else (`ingest`, `plan`, `clip`, ...) is implementation-defined and lives at `<vault>/persona/.claude/skills/kb-impl/`.
 
-When another skill needs to persist an artifact, call `/kb put <file> [--summary <article>] [--to <path>]` and use the returned path. Don't compute kb paths yourself - the on-disk layout (PARA, tag-only, plain folders, ...) is the implementation's concern, not the caller's. To learn what your `kb-impl` actually does, read `<vault>/persona/skills/kb-impl/SKILL.md`.
+When another skill needs to persist an artifact, call `/kb put <file> [--summary <article>] [--to <path>]` and use the returned path. Don't compute kb paths yourself - the on-disk layout (PARA, tag-only, plain folders, ...) is the implementation's concern, not the caller's. To learn what your `kb-impl` actually does, read `<vault>/persona/.claude/skills/kb-impl/SKILL.md`.
 
 ## Communication Style
 

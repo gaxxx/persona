@@ -20,8 +20,8 @@ Run a quick audit before asking anything. For each item, note done / missing / p
 - `TASK.md` exists at repo root (optional - only if user wants scheduled tasks).
 - Vault directory exists (path from `$VAULT_PATH` or `/vault` if running inside Docker).
 - `<vault>/persona/` exists.
-- `<vault>/persona/skills/kb-impl/` exists (any directory or symlink).
-- Personal skills are linked into `.claude/skills/` (any symlinks present).
+- `<vault>/persona/.claude/skills/kb-impl/` exists (any directory or symlink).
+- `.claude/skills` in the repo is a symlink to `<vault>/persona/.claude/skills/`.
 
 Tell the user what you found in 4-5 lines, then offer to fill the gaps.
 
@@ -61,21 +61,21 @@ Write all values to `.env`. If `.env` already has some keys, edit in place rathe
 ### 4. Vault skeleton + kb-impl
 
 ```bash
-mkdir -p "$VAULT_PATH/persona/skills"
+mkdir -p "$VAULT_PATH/persona/.claude/skills"
 mkdir -p "$VAULT_PATH/raw"
 ```
 
-If `<vault>/persona/skills/kb-impl/` is missing:
-- Offer to copy the minimal flat-folder starter: `cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/persona/skills/kb-impl"`
+If `<vault>/persona/.claude/skills/kb-impl/` is missing:
+- Offer to copy the minimal flat-folder starter: `cp -r share/skills/kb/examples/minimal "$VAULT_PATH/persona/.claude/skills/kb-impl"`
 - Tell them they can replace it later with PARA / Logseq / their own thing.
 
-### 5. Symlink personal skills
+### 5. Wire up .claude/skills
 
 ```bash
-./bin/link-personal-skills.sh
+./bin/link-skills.sh
 ```
 
-Show the script's output verbatim so they see what got linked.
+This makes `.claude/skills` a symlink to `<vault>/persona/.claude/skills/`, then seeds that directory with symlinks back to each generic skill in `share/skills/`. Show the output verbatim.
 
 ### 6. Final check + next step
 
@@ -99,7 +99,8 @@ If they're already inside the running container, skip the docker lines and just 
 `/setup` is idempotent. Common re-run scenarios:
 
 - **Switching vaults**: edit `VAULT_PATH` in `.env`, re-run `/setup`. It re-mkdirs the new vault skeleton and re-links skills.
-- **Added a new vault skill**: re-run just `./bin/link-personal-skills.sh` (no need for full setup).
+- **Added a new generic skill in `share/skills/`**: re-run just `./bin/link-skills.sh` (no need for full setup).
+- **Authored a personal skill** (a real dir under `<vault>/persona/.claude/skills/<name>/`): nothing to link - it's already visible via the master symlink.
 - **Rotated bot token**: edit `TELEGRAM_BOT_TOKEN` in `.env`, re-run `/setup` - it re-validates.
 
 When re-running, default to "skip if exists" - only ask before overwriting if the user explicitly said they want to redo something.

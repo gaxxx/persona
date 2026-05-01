@@ -1,6 +1,6 @@
 ---
 name: kb
-description: Personal knowledge base operations - interface only. Required ops are put/query/lint; any other subcommand (ingest, plan, clip, improve, ...) is implementation-defined and lives in the user's vault under persona/skills/kb-impl/.
+description: Personal knowledge base operations - interface only. Required ops are put/query/lint; any other subcommand (ingest, plan, clip, improve, ...) is implementation-defined and lives in the user's vault under persona/.claude/skills/kb-impl/.
 ---
 
 # kb - Knowledge Base Interface
@@ -17,7 +17,7 @@ Universal contract for storing and querying personal data. Other skills should c
 
 ## Implementation-defined (any other subcommand)
 
-`/kb <anything-else>` routes to the user's implementation skill at `<vault>/persona/skills/kb-impl/`. Common ops in this user's PARA + Obsidian impl:
+`/kb <anything-else>` routes to the user's implementation skill at `<vault>/persona/.claude/skills/kb-impl/`. Common ops in this user's PARA + Obsidian impl:
 
 - `/kb ingest` - process `<vault>/raw/` inbox
 - `/kb plan` - OKR / goals management
@@ -25,7 +25,7 @@ Universal contract for storing and querying personal data. Other skills should c
 - `/kb improve` - multi-agent QA loop
 - `/kb test` - redirects to `/assistant-test`
 
-To see what your impl supports: `cat <vault>/persona/skills/kb-impl/SKILL.md`.
+To see what your impl supports: `cat <vault>/persona/.claude/skills/kb-impl/SKILL.md`.
 
 ## How to call from another skill
 
@@ -35,17 +35,16 @@ To see what your impl supports: `cat <vault>/persona/skills/kb-impl/SKILL.md`.
 
 ## Implementation
 
-This file is a stub. Concrete behavior comes from `<vault>/persona/skills/kb-impl/SKILL.md` (and its `references/`). The `bin/link-personal-skills.sh` script symlinks the vault's `kb-impl` into this repo's `.claude/skills/` so Claude Code sees both the interface and the implementation.
+This file is a stub. Concrete behavior comes from `<vault>/persona/.claude/skills/kb-impl/SKILL.md` (and its `references/`). The repo's `.claude/skills` directory is a symlink to `<vault>/persona/.claude/skills/`, so any `kb-impl/` you put in the vault is visible to Claude Code automatically.
 
-If `kb-impl/` is missing on disk, `/kb <subcommand>` (other than the documented core 3) should respond: "kb implementation skill is not installed; configure `<vault>/persona/skills/kb-impl/` per SETUP.md".
+If `kb-impl/` is missing on disk, `/kb <subcommand>` (other than the documented core 3) should respond: "kb implementation skill is not installed; configure `<vault>/persona/.claude/skills/kb-impl/` per SETUP.md".
 
 ## Starting from scratch
 
 A minimal flat-folder example implementation lives at [`examples/minimal/SKILL.md`](examples/minimal/SKILL.md). Copy it to your vault to get started:
 
 ```bash
-cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/persona/skills/kb-impl"
-./bin/link-personal-skills.sh
+cp -r share/skills/kb/examples/minimal "$VAULT_PATH/persona/.claude/skills/kb-impl"
 ```
 
-Then edit the copy to fit your workflow (PARA, tagging, sibling folders, Dataview, ... whatever you like).
+Then edit the copy to fit your workflow (PARA, tagging, sibling folders, Dataview, ... whatever you like). No re-link step needed - the vault dir is already symlinked into the repo.

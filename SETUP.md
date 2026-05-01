@@ -30,7 +30,7 @@ git clone <repo-url> persona && cd persona
 claude                # then type:  /setup
 ```
 
-`/setup` validates your Telegram token (calls `getMe`), sends a test message to your `chat_id`, writes `.env`, copies `CLAUDE.md` from the example, provisions `<vault>/persona/`, copies the minimal `kb-impl` starter, and runs `bin/link-personal-skills.sh`. Idempotent - safe to re-run when you switch vaults or rotate tokens.
+`/setup` validates your Telegram token (calls `getMe`), sends a test message to your `chat_id`, writes `.env`, copies `CLAUDE.md` from the example, provisions `<vault>/persona/`, copies the minimal `kb-impl` starter, and runs `bin/link-skills.sh`. Idempotent - safe to re-run when you switch vaults or rotate tokens.
 
 If you'd rather do it by hand, the same steps:
 
@@ -49,11 +49,11 @@ mkdir -p "$VAULT_PATH"/{persona,raw}
 # which creates IDENTITY.md and USER.md interactively.
 
 # Pick a kb implementation (or write your own):
-cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/persona/skills/kb-impl"
+cp -r share/skills/kb/examples/minimal "$VAULT_PATH/persona/.claude/skills/kb-impl"
 # This is a flat-folder starter. Read it, customize, or replace with PARA / Logseq / etc.
 
 # 3. Link personal skills from your vault into the repo
-./bin/link-personal-skills.sh
+./bin/link-skills.sh
 
 # 4. Add scheduled tasks (optional)
 cp TASK.example.md TASK.md
@@ -73,26 +73,26 @@ docker compose exec persona claude /assistant-loop
 | Layer | Lives in | Examples | Tracked? |
 |---|---|---|---|
 | Generic infra | this repo | `bin/{tg,cron}-daemon.ts`, `.env.example`, Dockerfile, SETUP.md | yes |
-| Generic skills | `repo/.claude/skills/` | `assistant-loop`, `assistant-test`, `kb` (interface stub) | yes |
+| Generic skills | `repo/share/skills/` | `assistant-loop`, `assistant-test`, `kb` (interface stub), `setup` | yes |
 | Personal config | repo (gitignored) | `.env`, `CLAUDE.md`, `TASK.md` | no |
-| Personal skills | `<vault>/persona/skills/` | `kb-impl`, `game-time`, `ds160`, ... | no (vault is yours) |
+| Personal skills | `<vault>/persona/.claude/skills/` | `kb-impl`, plus anything you write | no (vault is yours) |
 
-`bin/link-personal-skills.sh` symlinks every `<vault>/persona/skills/*` into the repo's `.claude/skills/` so Claude Code sees both layers as if they were local. Idempotent - re-run any time you add a vault skill.
+The repo's `.claude/skills` directory is a single symlink to `<vault>/persona/.claude/skills/`, created by `bin/link-skills.sh`. Generic skills from `share/skills/` are symlinked into the vault directory so Claude Code sees both layers mixed under `.claude/skills/`. Idempotent - re-run if you add a generic skill or switch vaults.
 
-To add a new personal skill:
+To add a new personal skill, just create it directly:
 ```bash
-mkdir -p "$VAULT_PATH/persona/skills/<name>"
+mkdir -p .claude/skills/<name>     # writes through the symlink to the vault
 # author SKILL.md and references/
-./bin/link-personal-skills.sh   # re-link
 ```
+No re-link step needed - personal skills are real dirs in the vault, already visible through the master symlink.
 
 ## kb interface vs implementation
 
-The `/kb` skill in this repo is a thin **interface** - it documents the contract (`put`, `query`, `lint` are required; `ingest` / `plan` / `clip` / etc. are implementation-defined) but does not actually store anything. The real storage logic lives in your vault at `<vault>/persona/skills/kb-impl/`.
+The `/kb` skill in this repo is a thin **interface** - it documents the contract (`put`, `query`, `lint` are required; `ingest` / `plan` / `clip` / etc. are implementation-defined) but does not actually store anything. The real storage logic lives in your vault at `<vault>/persona/.claude/skills/kb-impl/`.
 
 This decouples callers from layout choices. Other skills should call `/kb put <file>` and use the returned path; never hard-code paths. Different users can plug in PARA + Obsidian, Logseq, or plain folders without touching repo code.
 
-A minimal flat-folder example implementation ships at `.claude/skills/kb/examples/minimal/` - copy it as a starting point.
+A minimal flat-folder example implementation ships at `share/skills/kb/examples/minimal/` - copy it as a starting point.
 
 ## Authenticating Claude Code
 
@@ -132,14 +132,14 @@ repo/
 │   ├── tg-daemon.ts            # Telegram I/O daemon
 │   ├── tg-send.ts / tg-typing.ts / tg-pull.ts / tg-watch.ts
 │   ├── cron-daemon.ts          # scheduled-task daemon
-│   └── link-personal-skills.sh # symlink helper
-├── .claude/skills/
-│   ├── assistant-loop/         # generic
-│   ├── assistant-test/         # generic
-│   ├── kb/                     # interface stub (generic)
+│   └── link-skills.sh          # wires up .claude/skills as a symlink
+├── share/skills/               # generic skills shipped with the repo (tracked)
+│   ├── assistant-loop/
+│   ├── assistant-test/
+│   ├── kb/                     # interface stub
 │   │   └── examples/minimal/   # starter kb-impl
-│   ├── kb-impl@                # symlink to <vault>
-│   ├── ds160@ game-time@ ...   # other personal skills (symlinks)
+│   └── setup/
+├── .claude/skills@             # symlink -> <vault>/persona/.claude/skills/ (gitignored)
 ├── .env                        # per-user secrets (gitignored)
 ├── CLAUDE.md                   # per-user instructions (gitignored)
 ├── TASK.md                     # per-user cron tasks (gitignored)
@@ -149,7 +149,10 @@ repo/
 ├── persona/
 │   ├── IDENTITY.md / USER.md / MEMORY.md / tasks.md
 │   ├── tests/cases.md          # /assistant-test cases
-│   └── skills/                 # personal skills (kb-impl, game-time, ...)
+│   └── .claude/skills/         # all your skills - personal real dirs +
+│       ├── kb-impl/            # symlinks back to <repo>/share/skills/*
+│       ├── assistant-loop@     # (symlink to repo)
+│       ├── ...
 ├── raw/                        # /kb ingest inbox
 └── kb/ ...                     # whatever your kb-impl writes
 ```
@@ -171,4 +174,4 @@ docker compose exec persona claude /assistant-loop  # attach Claude Code inside
 - **Cron tasks rejected with "TELEGRAM_CHAT_ID not set"** - bin scripts enforce a chat allowlist; ensure `.env` has `TELEGRAM_CHAT_ID=<your-id>` (or `TELEGRAM_CHAT_IDS=id1,id2` for multi-user).
 - **Vault writes don't show up in Obsidian** - Google Drive bind-mounts on macOS sometimes lag a few seconds. Force-sync the Drive client or wait.
 - **MCP OAuth errors** - claude.ai connectors (Gmail, Calendar, Notion) re-auth via `~/.claude/`. Run `claude` interactively to refresh the session.
-- **`/kb <subcmd>` says "implementation not installed"** - run `cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/persona/skills/kb-impl"` then `./bin/link-personal-skills.sh`.
+- **`/kb <subcmd>` says "implementation not installed"** - run `cp -r share/skills/kb/examples/minimal "$VAULT_PATH/persona/.claude/skills/kb-impl"`. No relink needed.
