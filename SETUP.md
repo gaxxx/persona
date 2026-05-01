@@ -52,7 +52,7 @@ mkdir -p "$VAULT_PATH"/{persona,raw}
 cp -r share/skills/kb/examples/minimal "$VAULT_PATH/persona/.claude/skills/kb-impl"
 # This is a flat-folder starter. Read it, customize, or replace with PARA / Logseq / etc.
 
-# 3. Link personal skills from your vault into the repo
+# 3. Install shared skills into your vault and symlink them back
 ./bin/link-skills.sh
 
 # 4. Add scheduled tasks (optional)
@@ -77,17 +77,13 @@ docker compose exec persona claude /assistant-loop
 | Personal config | repo (gitignored) | `.env`, `CLAUDE.md`, `TASK.md` | no |
 | Personal skills | `<vault>/persona/.claude/skills/` | `kb-impl`, plus anything you write | no (vault is yours) |
 
-`.claude/skills/setup/` is the only skill tracked directly in the repo, so `/setup` works the moment you `git clone` (no symlinks required yet). On first run, `bin/link-skills.sh` does two things:
+`.claude/skills/setup/` is the only skill tracked directly in the repo, so `/setup` works the moment you `git clone` (no symlinks required yet). `bin/link-skills.sh` only manages the shared skills (`assistant-loop`, `assistant-test`, `kb`):
 
-1. **Copies** each generic template from `share/skills/` (assistant-loop, assistant-test, kb) into `<vault>/persona/.claude/skills/` as a real dir. Your vault becomes the working copy - edit freely. Every subsequent run diffs each shared skill against `share/skills/` and asks y/N before overwriting if they differ; in-sync skills stay quiet.
-2. **Symlinks** every skill in the vault into `.claude/skills/<name>` so Claude Code sees them alongside the tracked `setup`.
+1. **Copies** each template from `share/skills/` into `<vault>/persona/.claude/skills/` as a real dir. Your vault becomes the working copy - edit freely.
+2. **Symlinks** that vault copy back into `.claude/skills/<name>`.
+3. Every subsequent run diffs each shared skill against `share/skills/` and asks y/N before overwriting if they differ; in-sync skills stay quiet.
 
-To add a new personal skill, drop it in the vault and re-link:
-```bash
-mkdir -p "$VAULT_PATH/persona/.claude/skills/<name>"
-# author SKILL.md and references/
-./bin/link-skills.sh
-```
+Personal skills are yours to manage. The simplest path is to create them directly in `.claude/skills/<name>/` — `.gitignore` excludes everything there except `setup`, so they stay out of git automatically. If you want a personal skill backed up via your Obsidian vault, write it in `<vault>/persona/.claude/skills/<name>/` and symlink it yourself: `ln -s "$VAULT_PATH/persona/.claude/skills/<name>" .claude/skills/<name>`.
 
 ## kb interface vs implementation
 

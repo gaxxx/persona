@@ -101,7 +101,7 @@ If they're already inside the running container, skip the docker lines and just 
 - **Switching vaults**: edit `VAULT_PATH` in `.env`, re-run `/setup`. It re-mkdirs the new vault skeleton and copies skills into it.
 - **Added a new generic skill in `share/skills/`**: re-run just `./bin/link-skills.sh` (it installs missing skills, leaves existing ones alone).
 - **Pulled repo updates and want them in the vault**: re-run `./bin/link-skills.sh`. For each shared skill that differs, it shows a diff and asks y/N before overwriting. Skills already in sync stay quiet.
-- **Authored a personal skill** (a real dir under `<vault>/persona/.claude/skills/<name>/`): re-run `./bin/link-skills.sh` to symlink it into `.claude/skills/`.
+- **Authoring a personal skill**: simplest is to create it directly in `.claude/skills/<name>/` (gitignored). If you want it backed up via the vault, put it under `<vault>/persona/.claude/skills/<name>/` and symlink it yourself - `link-skills.sh` only manages shared skills.
 - **Rotated bot token**: edit `TELEGRAM_BOT_TOKEN` in `.env`, re-run `/setup` - it re-validates.
 
 When re-running, default to "skip if exists" - only ask before overwriting if the user explicitly said they want to redo something.
