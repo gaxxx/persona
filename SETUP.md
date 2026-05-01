@@ -27,8 +27,26 @@ mkdir -p "$(grep ^VAULT_PATH .env | cut -d= -f2)/persona"
 # Leave persona/ empty - first Telegram message triggers onboarding,
 # which creates IDENTITY.md and USER.md interactively.
 
-# 3. Build and start
+# 3. (Optional) Link personal skills from your vault into the repo
+# If your vault has personal skills under <vault>/.claude/skills/,
+# this script symlinks them into repo's .claude/skills/ so Claude Code sees them.
+./bin/link-personal-skills.sh
+
+# 4. Build and start
 docker compose up -d --build
+```
+
+## Personal vs generic skills
+
+The repo only ships **generic** skills (`assistant-loop`, `assistant-test`). Personal skills that depend on your specific data (e.g. a knowledge-base skill, a per-family scheduler) live in your **vault**, under `<vault>/.claude/skills/<name>/`. The `bin/link-personal-skills.sh` script symlinks them back into the repo's `.claude/skills/` so Claude Code can see them as if they were local.
+
+This keeps the repo clean (no personal data in git) and your personal skills travel with your vault (move the vault, your skills come along).
+
+To add a new personal skill:
+```bash
+mkdir -p "$VAULT_PATH/.claude/skills/<name>"
+# author SKILL.md and refs in there
+./bin/link-personal-skills.sh   # idempotent re-link
 ```
 
 ## Authenticating Claude Code

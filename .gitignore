@@ -11,8 +11,9 @@ Obsidian
 # Per-user CLAUDE.md (template: CLAUDE.example.md)
 CLAUDE.md
 
-# Private/personal skills (each user maintains their own; not shipped in template)
-.claude/skills/ds160/
-.claude/skills/game-time/
-.claude/skills/kb/
-.claude/skills/uscis-check/
+# Private/personal skills — symlinked from <vault>/.claude/skills/ via bin/link-personal-skills.sh.
+# Pattern matches both real dirs and symlinks. Repo only ships generic skills (assistant-loop, assistant-test).
+.claude/skills/ds160
+.claude/skills/game-time
+.claude/skills/kb
+.claude/skills/uscis-check
