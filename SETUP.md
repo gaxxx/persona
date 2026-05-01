@@ -77,14 +77,17 @@ docker compose exec persona claude /assistant-loop
 | Personal config | repo (gitignored) | `.env`, `CLAUDE.md`, `TASK.md` | no |
 | Personal skills | `<vault>/persona/.claude/skills/` | `kb-impl`, plus anything you write | no (vault is yours) |
 
-The repo's `.claude/skills` directory is a single symlink to `<vault>/persona/.claude/skills/`, created by `bin/link-skills.sh`. On first run, the script also **copies** each generic skill from `share/skills/` into the vault, so your vault becomes the working copy and you can edit any skill freely. Re-run with `--update` to pull in repo-side changes (overwrites your edits, so review first).
+`.claude/skills/setup/` is the only skill tracked directly in the repo, so `/setup` works the moment you `git clone` (no symlinks required yet). On first run, `bin/link-skills.sh` does two things:
 
-To add a new personal skill, just create it directly:
+1. **Copies** each generic template from `share/skills/` (assistant-loop, assistant-test, kb) into `<vault>/persona/.claude/skills/` as a real dir. Your vault becomes the working copy - edit freely. Re-run with `--update` to pull in repo-side changes (overwrites local edits, so review first).
+2. **Symlinks** every skill in the vault into `.claude/skills/<name>` so Claude Code sees them alongside the tracked `setup`.
+
+To add a new personal skill, drop it in the vault and re-link:
 ```bash
-mkdir -p .claude/skills/<name>     # writes through the symlink to the vault
+mkdir -p "$VAULT_PATH/persona/.claude/skills/<name>"
 # author SKILL.md and references/
+./bin/link-skills.sh
 ```
-No re-link step needed - personal skills are real dirs in the vault, already visible through the master symlink.
 
 ## kb interface vs implementation
 
@@ -133,13 +136,14 @@ repo/
 │   ├── tg-send.ts / tg-typing.ts / tg-pull.ts / tg-watch.ts
 │   ├── cron-daemon.ts          # scheduled-task daemon
 │   └── link-skills.sh          # wires up .claude/skills as a symlink
-├── share/skills/               # generic skills shipped with the repo (tracked)
+├── share/skills/               # generic templates copied into vault on /setup
 │   ├── assistant-loop/
 │   ├── assistant-test/
-│   ├── kb/                     # interface stub
-│   │   └── examples/minimal/   # starter kb-impl
-│   └── setup/
-├── .claude/skills@             # symlink -> <vault>/persona/.claude/skills/ (gitignored)
+│   └── kb/                     # interface stub
+│       └── examples/minimal/   # starter kb-impl
+├── .claude/skills/
+│   ├── setup/                  # tracked - the bootstrap skill
+│   └── <other>@                # per-skill symlinks to vault (gitignored)
 ├── .env                        # per-user secrets (gitignored)
 ├── CLAUDE.md                   # per-user instructions (gitignored)
 ├── TASK.md                     # per-user cron tasks (gitignored)

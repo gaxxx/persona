@@ -19,9 +19,10 @@ Three independent processes talk to a shared filesystem and persona config:
 - `bin/cron-daemon.ts` - reads `TASK.md`, schedules each task by its cron expression, spawns a one-shot `claude -p` on fire. Auto-reloads on file change.
 - The interactive REPL you `claude` into - heartbeat checks on the two daemons and ad-hoc work.
 
-Skills work in two stages:
-- The repo ships templates under `share/skills/` (`assistant-loop`, `assistant-test`, `kb` interface stub, `setup`).
-- On first run, `bin/link-skills.sh` copies them into `<vault>/persona/.claude/skills/` and points the repo's `.claude/skills` symlink at that vault directory. After that, the vault owns all skills - personal and shipped alike - and you can edit any of them freely. Pull repo updates with `./bin/link-skills.sh --update`.
+Skills:
+- The `setup` skill is tracked in `.claude/skills/setup/` so `/setup` works the moment you `git clone` - no bootstrap step needed.
+- The remaining shipped skills (`assistant-loop`, `assistant-test`, `kb` interface stub) live as templates in `share/skills/`. `/setup` copies them into `<vault>/persona/.claude/skills/` and symlinks each back into `.claude/skills/`. After that, the vault owns those skills and you can edit them freely. Pull repo updates with `./bin/link-skills.sh --update`.
+- Personal skills you author go straight into the vault.
 
 ## Setup
 
