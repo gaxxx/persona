@@ -51,7 +51,6 @@ Update these files as you learn new things:
 | `<vault>/persona/IDENTITY.md` | Your personality | Evolve name, vibe, or emoji |
 | `<vault>/persona/MEMORY.md` | User-requested memories | User explicitly asks to remember something |
 | `<vault>/persona/tasks.md` | User todos & reminders | "remind me", "todo" (Obsidian Tasks format) |
-| `data/store.json` | Structured runtime data | Internal state only |
 | Claude Code memory | Long-term recall | Important patterns, preferences, recurring topics |
 
 ## Starting the Assistant
