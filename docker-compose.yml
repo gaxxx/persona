@@ -11,9 +11,9 @@ services:
       # Obsidian vault - substitute <vault> wherever it appears in skills
       - ${VAULT_PATH}:/vault
       # Claude Code auth (carries claude.ai subscription session from host)
-      - ${HOME}/.claude:/root/.claude
+      - ${HOME}/.claude:/home/bun/.claude
       # Persistent npm cache (gmail MCP via npx - auth state under here)
-      - persona-npm:/root/.npm
+      - persona-npm:/home/bun/.npm
     stdin_open: true
     tty: true
     restart: unless-stopped

@@ -10,16 +10,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Claude Code CLI - native binary install. Symlink into /usr/local/bin so the
-# launcher is on PATH for any user; ENV keeps /root/.local/bin first for the
-# auto-update mechanism to find its own assets.
-RUN curl -fsSL https://claude.ai/install.sh | bash \
-    && ln -sf /root/.local/bin/claude /usr/local/bin/claude
+# Run as bun (uid 1000), not root. Claude Code refuses --permission-mode
+# bypassPermissions when uid=0, which would break the daemons that spawn
+# headless `claude -p` subprocesses.
+USER bun
+ENV PATH="/home/bun/.local/bin:${PATH}"
 
-ENV PATH="/root/.local/bin:${PATH}"
+# Claude Code CLI - native binary install for the bun user.
+RUN curl -fsSL https://claude.ai/install.sh | bash
 
 WORKDIR /workspace
-
-# Container runs as root so the docker-compose mount of ~/.claude -> /root/.claude
-# (which carries the host's claude.ai subscription session) lines up.
 CMD ["claude"]
