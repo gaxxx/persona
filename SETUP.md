@@ -23,10 +23,18 @@ Skills are split into two layers:
 
 ## One-time setup
 
-```bash
-git clone <repo-url> persona
-cd persona
+The fastest path is the `/setup` skill, which wraps every step below into one interactive flow:
 
+```bash
+git clone <repo-url> persona && cd persona
+claude                # then type:  /setup
+```
+
+`/setup` validates your Telegram token (calls `getMe`), sends a test message to your `chat_id`, writes `.env`, copies `CLAUDE.md` from the example, provisions `<vault>/persona/`, copies the minimal `kb-impl` starter, and runs `bin/link-personal-skills.sh`. Idempotent - safe to re-run when you switch vaults or rotate tokens.
+
+If you'd rather do it by hand, the same steps:
+
+```bash
 # 1. Project config
 cp .env.example .env
 # edit .env: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, VAULT_PATH, TZ
@@ -50,9 +58,14 @@ cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/persona/skills/kb-impl"
 # 4. Add scheduled tasks (optional)
 cp TASK.example.md TASK.md
 # Edit task sections; cron-daemon reads this file and auto-reloads on save.
+```
 
+Then:
+
+```bash
 # 5. Build and start
 docker compose up -d --build
+docker compose exec persona claude /assistant-loop
 ```
 
 ## Personal vs generic skills

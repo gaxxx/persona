@@ -25,24 +25,22 @@ Skills split into two layers:
 
 ## Setup
 
-See [SETUP.md](./SETUP.md). Short version:
-
 ```bash
-cp .env.example .env            # set TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, VAULT_PATH, TZ
-cp CLAUDE.example.md CLAUDE.md  # gitignored; tweak if you want
-cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/persona/skills/kb-impl"
-./bin/link-personal-skills.sh
-docker compose up -d --build
+git clone <repo-url> persona && cd persona
+claude                # then type:  /setup
 ```
 
-`docker compose up` only starts the container - it does **not** start the assistant. You have to attach and kick off the loop yourself:
+`/setup` is an interactive wizard - it walks through `.env`, validates your Telegram bot token, sends a test message to your chat_id, provisions the vault skeleton, copies the starter `kb-impl`, and links personal skills. Idempotent; safe to re-run.
+
+After `/setup` finishes:
 
 ```bash
-docker compose exec persona claude       # first time: run /login inside
+docker compose up -d --build              # build + run the container
+docker compose exec persona claude        # attach (run /login first time)
 docker compose exec persona claude /assistant-loop
 ```
 
-`/assistant-loop` boots the tg-daemon and cron-daemon and keeps a heartbeat on both. After that, message your bot.
+`docker compose up` only starts the container - it does **not** start the assistant. `/assistant-loop` is what boots the tg-daemon and cron-daemon. Once that's running, message your bot. See [SETUP.md](./SETUP.md) for the long version.
 
 ## Why a separate repo per user
 
