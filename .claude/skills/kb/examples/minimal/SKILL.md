@@ -1,6 +1,6 @@
 ---
 name: kb-impl
-description: Minimal flat-folder kb implementation. Honors the put/query/lint contract from /kb. Copy this directory to <vault>/.claude/skills/kb-impl/ as a starting point and customize from there.
+description: Minimal flat-folder kb implementation. Honors the put/query/lint contract from /kb. Copy this directory to <vault>/persona/skills/kb-impl/ as a starting point and customize from there.
 ---
 
 # kb-impl (minimal example)
@@ -10,8 +10,8 @@ A minimum-viable implementation of the `/kb` interface. Stores everything as Mar
 Use this as a starting template:
 
 ```bash
-cp -r <repo>/.claude/skills/kb/examples/minimal <vault>/.claude/skills/kb-impl
-# now edit <vault>/.claude/skills/kb-impl/SKILL.md to customize
+cp -r <repo>/.claude/skills/kb/examples/minimal <vault>/persona/skills/kb-impl
+# now edit <vault>/persona/skills/kb-impl/SKILL.md to customize
 ```
 
 ## Layout
@@ -69,4 +69,4 @@ This minimal impl does NOT implement `/kb ingest`, `/kb plan`, `/kb clip`, etc. 
 - **Add Dataview hubs**: aggregate same-type articles via frontmatter `type:` fields.
 - **Add `clip`**: shell out to `yt-dlp --skip-download --write-info-json --write-auto-sub` to clip videos into raw/.
 
-See the maintainer's full implementation in `<vault>/.claude/skills/kb-impl/` for one fleshed-out example (PARA + folder-note + Dataview + `assets/` subfolder).
+See the maintainer's full implementation in `<vault>/persona/skills/kb-impl/` for one fleshed-out example (PARA + folder-note + Dataview + `assets/` subfolder).

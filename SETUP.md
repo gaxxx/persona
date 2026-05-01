@@ -41,7 +41,7 @@ mkdir -p "$VAULT_PATH"/{persona,raw}
 # which creates IDENTITY.md and USER.md interactively.
 
 # Pick a kb implementation (or write your own):
-cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/.claude/skills/kb-impl"
+cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/persona/skills/kb-impl"
 # This is a flat-folder starter. Read it, customize, or replace with PARA / Logseq / etc.
 
 # 3. Link personal skills from your vault into the repo
@@ -62,20 +62,20 @@ docker compose up -d --build
 | Generic infra | this repo | `bin/{tg,cron}-daemon.ts`, `.env.example`, Dockerfile, SETUP.md | yes |
 | Generic skills | `repo/.claude/skills/` | `assistant-loop`, `assistant-test`, `kb` (interface stub) | yes |
 | Personal config | repo (gitignored) | `.env`, `CLAUDE.md`, `TASK.md` | no |
-| Personal skills | `<vault>/.claude/skills/` | `kb-impl`, `game-time`, `ds160`, ... | no (vault is yours) |
+| Personal skills | `<vault>/persona/skills/` | `kb-impl`, `game-time`, `ds160`, ... | no (vault is yours) |
 
-`bin/link-personal-skills.sh` symlinks every `<vault>/.claude/skills/*` into the repo's `.claude/skills/` so Claude Code sees both layers as if they were local. Idempotent - re-run any time you add a vault skill.
+`bin/link-personal-skills.sh` symlinks every `<vault>/persona/skills/*` into the repo's `.claude/skills/` so Claude Code sees both layers as if they were local. Idempotent - re-run any time you add a vault skill.
 
 To add a new personal skill:
 ```bash
-mkdir -p "$VAULT_PATH/.claude/skills/<name>"
+mkdir -p "$VAULT_PATH/persona/skills/<name>"
 # author SKILL.md and references/
 ./bin/link-personal-skills.sh   # re-link
 ```
 
 ## kb interface vs implementation
 
-The `/kb` skill in this repo is a thin **interface** - it documents the contract (`put`, `query`, `lint` are required; `ingest` / `plan` / `clip` / etc. are implementation-defined) but does not actually store anything. The real storage logic lives in your vault at `<vault>/.claude/skills/kb-impl/`.
+The `/kb` skill in this repo is a thin **interface** - it documents the contract (`put`, `query`, `lint` are required; `ingest` / `plan` / `clip` / etc. are implementation-defined) but does not actually store anything. The real storage logic lives in your vault at `<vault>/persona/skills/kb-impl/`.
 
 This decouples callers from layout choices. Other skills should call `/kb put <file>` and use the returned path; never hard-code paths. Different users can plug in PARA + Obsidian, Logseq, or plain folders without touching repo code.
 
@@ -135,10 +135,10 @@ repo/
 <vault>/
 ├── persona/
 │   ├── IDENTITY.md / USER.md / MEMORY.md / tasks.md
-│   └── tests/cases.md          # /assistant-test cases
+│   ├── tests/cases.md          # /assistant-test cases
+│   └── skills/                 # personal skills (kb-impl, game-time, ...)
 ├── raw/                        # /kb ingest inbox
-├── kb/ ...                     # whatever your kb-impl writes
-└── .claude/skills/             # personal skills (kb-impl, game-time, ...)
+└── kb/ ...                     # whatever your kb-impl writes
 ```
 
 ## Stopping / restarting
@@ -158,4 +158,4 @@ docker compose exec persona claude /assistant-loop  # attach Claude Code inside
 - **Cron tasks rejected with "TELEGRAM_CHAT_ID not set"** - bin scripts enforce a chat allowlist; ensure `.env` has `TELEGRAM_CHAT_ID=<your-id>` (or `TELEGRAM_CHAT_IDS=id1,id2` for multi-user).
 - **Vault writes don't show up in Obsidian** - Google Drive bind-mounts on macOS sometimes lag a few seconds. Force-sync the Drive client or wait.
 - **MCP OAuth errors** - claude.ai connectors (Gmail, Calendar, Notion) re-auth via `~/.claude/`. Run `claude` interactively to refresh the session.
-- **`/kb <subcmd>` says "implementation not installed"** - run `cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/.claude/skills/kb-impl"` then `./bin/link-personal-skills.sh`.
+- **`/kb <subcmd>` says "implementation not installed"** - run `cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/persona/skills/kb-impl"` then `./bin/link-personal-skills.sh`.
