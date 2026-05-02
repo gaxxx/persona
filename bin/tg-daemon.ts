@@ -78,7 +78,11 @@ interface ClaudeProc {
 // burned at 2.7M cached tokens). Whichever fires first.
 const MAX_TURNS = 50;
 const MAX_AGE_MS = 4 * 60 * 60 * 1000;
-const TURN_TIMEOUT_MS = 5 * 60 * 1000;
+// Two-phase timeout: thinking (no output yet) gets a tight cap to catch hung
+// loops fast; once claude starts producing output we extend to a generous
+// total so long but actively-streaming turns don't get murdered.
+const FIRST_RESPONSE_TIMEOUT_MS = 2 * 60 * 1000;
+const TOTAL_TIMEOUT_MS = 15 * 60 * 1000;
 const TURN_TIMEOUT_ERR = "turn timeout";
 
 function spawnClaude(): ClaudeProc {
@@ -111,6 +115,9 @@ function spawnClaude(): ClaudeProc {
   // Single-flight: serialize via a chained promise.
   let chain: Promise<void> = Promise.resolve();
   let pendingResolve: (() => void) | null = null;
+  // Fired once per turn the first time claude emits any assistant event
+  // (text or tool_use). Used to swap thinking -> typing timeout.
+  let onFirstResponse: (() => void) | null = null;
   const enc = new TextEncoder();
 
   // Read stdout NDJSON forever, signal turn completion.
@@ -134,6 +141,11 @@ function spawnClaude(): ClaudeProc {
         } catch {
           continue;
         }
+        if (ev.type === "assistant" && onFirstResponse) {
+          const cb = onFirstResponse;
+          onFirstResponse = null;
+          cb();
+        }
         if (ev.type === "result") {
           const r = pendingResolve;
           pendingResolve = null;
@@ -156,18 +168,37 @@ function spawnClaude(): ClaudeProc {
     const turn = chain.then(
       () =>
         new Promise<void>((resolve, reject) => {
-          let timer: ReturnType<typeof setTimeout> | undefined;
+          let firstResponseTimer: ReturnType<typeof setTimeout> | undefined;
+          let totalTimer: ReturnType<typeof setTimeout> | undefined;
+          const cleanup = () => {
+            if (firstResponseTimer) { clearTimeout(firstResponseTimer); firstResponseTimer = undefined; }
+            if (totalTimer) { clearTimeout(totalTimer); totalTimer = undefined; }
+            onFirstResponse = null;
+          };
           pendingResolve = () => {
-            if (timer) clearTimeout(timer);
+            cleanup();
             resolve();
           };
-          timer = setTimeout(() => {
+          const fireTimeout = (reason: string) => {
             if (pendingResolve === null) return;
             pendingResolve = null;
-            log("turn timed out, killing claude");
+            cleanup();
+            log(`turn timed out (${reason}), killing claude`);
             try { proc.kill(); } catch {}
             reject(new Error(TURN_TIMEOUT_ERR));
-          }, TURN_TIMEOUT_MS);
+          };
+          firstResponseTimer = setTimeout(
+            () => fireTimeout("no first response in 2min"),
+            FIRST_RESPONSE_TIMEOUT_MS,
+          );
+          totalTimer = setTimeout(
+            () => fireTimeout("total 15min"),
+            TOTAL_TIMEOUT_MS,
+          );
+          onFirstResponse = () => {
+            log("first response received, switching to typing phase");
+            if (firstResponseTimer) { clearTimeout(firstResponseTimer); firstResponseTimer = undefined; }
+          };
           const payload = JSON.stringify({ type: "user", message: { role: "user", content: text } }) + "\n";
           proc.stdin.write(enc.encode(payload));
         }),
