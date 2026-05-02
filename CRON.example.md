@@ -2,7 +2,7 @@
 
 Source of truth for recurring tasks. The `bin/cron-daemon.ts` process reads this file, schedules each section by its `Cron:` expression, and on fire spawns a one-shot `claude -p --permission-mode bypassPermissions` to execute the prompt. Auto-reloads on file change (fs.watch). Each task self-updates its own **Last run** line when it fires.
 
-*This is the example template. Setup copies it into `<vault>/persona/CRON.md` and symlinks the result back into the repo as `CRON.md` (gitignored). Edit the vault copy — add your real chat_id and task prompts there.*
+*This is the example template. Setup copies it into `<vault>/persona/CRON.md` (the path `bin/cron-daemon.ts` reads via `$VAULT_PATH`). No repo-root copy or symlink — only `CLAUDE.md` needs that, since Claude Code auto-loads it from cwd. Edit `<vault>/persona/CRON.md` directly.*
 
 ## example-task
 

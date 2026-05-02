@@ -16,7 +16,12 @@ import { existsSync, mkdirSync, readFileSync, watch, appendFileSync } from "fs";
 import { resolve, dirname } from "path";
 
 const ROOT = resolve(import.meta.dir, "..");
-const CRON_FILE = resolve(ROOT, "CRON.md");
+const VAULT = process.env.VAULT_PATH;
+if (!VAULT) {
+  console.error("VAULT_PATH is required (set it in .env)");
+  process.exit(1);
+}
+const CRON_FILE = resolve(VAULT, "persona/CRON.md");
 const LOG_FILE = resolve(ROOT, "data/cron.log");
 
 if (!existsSync(dirname(LOG_FILE))) mkdirSync(dirname(LOG_FILE), { recursive: true });

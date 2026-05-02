@@ -8,10 +8,12 @@ data/
 .mcp.json
 Obsidian
 
-# Per-user files - kept in <vault>/persona/ and symlinked into the repo root
-# (templates: CLAUDE.example.md, CRON.example.md). Setup wizard wires this up.
+# Per-user CLAUDE.md - real file lives at <vault>/persona/CLAUDE.md, symlinked
+# into the repo root (Claude Code auto-loads CLAUDE.md from cwd). Template:
+# CLAUDE.example.md. Setup wizard wires this up.
+# CRON.md isn't here because it lives directly at <vault>/persona/CRON.md;
+# bin/cron-daemon.ts reads $VAULT_PATH/persona/CRON.md, no repo-root copy.
 CLAUDE.md
-CRON.md
 
 # Personal skill content lives in <vault>/persona/.claude/skills/ and is
 # symlinked into .claude/skills/ per-skill by bin/link-skills.sh. The setup

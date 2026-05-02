@@ -56,8 +56,8 @@ cp -r share/skills/kb/examples/minimal "$VAULT_PATH/persona/.claude/skills/kb-im
 ./bin/link-skills.sh
 
 # 4. Add scheduled tasks (optional)
-cp CRON.example.md CRON.md
-# Edit task sections; cron-daemon reads this file and auto-reloads on save.
+cp CRON.example.md "$VAULT_PATH/persona/CRON.md"
+# Edit task sections; cron-daemon reads $VAULT_PATH/persona/CRON.md and auto-reloads on save.
 ```
 
 Then:
@@ -74,7 +74,8 @@ docker compose exec persona claude /assistant-loop
 |---|---|---|---|
 | Generic infra | this repo | `bin/{tg,cron}-daemon.ts`, `.env.example`, Dockerfile, SETUP.md | yes |
 | Generic skills | `repo/share/skills/` | `assistant-loop`, `assistant-test`, `kb` (interface stub), `setup` | yes |
-| Personal config | repo (gitignored) | `.env`, `CLAUDE.md`, `CRON.md` | no |
+| Personal config (repo, gitignored) | repo root | `.env`, `CLAUDE.md` (symlink to vault) | no |
+| Personal config (vault) | `<vault>/persona/` | `CLAUDE.md`, `CRON.md`, `USER.md`, `IDENTITY.md`, `MEMORY.md`, `tasks.md` | yes (vault is yours) |
 | Personal skills | `<vault>/persona/.claude/skills/` | `kb-impl`, plus anything you write | no (vault is yours) |
 
 `.claude/skills/setup/` is the only skill tracked directly in the repo, so `/setup` works the moment you `git clone` (no symlinks required yet). `bin/link-skills.sh` only manages the shared skills (`assistant-loop`, `assistant-test`, `kb`):
@@ -115,11 +116,11 @@ Send any message to your bot. The assistant will:
 2. Pick its own identity (`IDENTITY.md`)
 3. Reply
 
-After onboarding, any scheduled tasks in `CRON.md` start running on the cron-daemon's schedule.
+After onboarding, any scheduled tasks in `<vault>/persona/CRON.md` start running on the cron-daemon's schedule.
 
 ## Adding scheduled tasks
 
-`CRON.md` is the source of truth for cron tasks. Each `## <task-id>` section has a `Cron:` expression and a `Prompt:` block. The cron-daemon parses this file on startup and reloads on change (fs.watch). On fire it spawns a fresh `claude -p --permission-mode bypassPermissions <prompt>` subprocess; the prompt itself does the work and writes results (typically to Telegram via `bin/tg-send.ts`).
+`<vault>/persona/CRON.md` is the source of truth for cron tasks. Each `## <task-id>` section has a `Cron:` expression and a `Prompt:` block. The cron-daemon resolves the path from `$VAULT_PATH/persona/CRON.md`, parses it on startup, and reloads on change (fs.watch). On fire it spawns a fresh `claude -p --permission-mode bypassPermissions <prompt>` subprocess; the prompt itself does the work and writes results (typically to Telegram via `bin/tg-send.ts`).
 
 Each task is expected to update its own `**Last run:**` line when it fires.
 
@@ -141,12 +142,12 @@ repo/
 │   ├── setup/                  # tracked - the bootstrap skill
 │   └── <other>@                # per-skill symlinks to vault (gitignored)
 ├── .env                        # per-user secrets (gitignored)
-├── CLAUDE.md                   # per-user instructions (gitignored)
-├── CRON.md                     # per-user cron tasks (gitignored)
+├── CLAUDE.md@                  # symlink -> <vault>/persona/CLAUDE.md (gitignored)
 └── docker-compose.yml
 
 <vault>/
 ├── persona/
+│   ├── CLAUDE.md / CRON.md     # source of truth (CLAUDE.md is symlinked into the repo)
 │   ├── IDENTITY.md / USER.md / MEMORY.md / tasks.md
 │   ├── tests/cases.md          # /assistant-test cases
 │   └── .claude/skills/         # all your skills as real dirs - personal +

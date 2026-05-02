@@ -17,7 +17,7 @@ Run a quick audit before asking anything. For each item, note done / missing / p
 
 - `.env` exists at repo root, and has non-empty `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `VAULT_PATH`, `TZ`.
 - `CLAUDE.md` at repo root is a symlink to `<vault>/persona/CLAUDE.md`, and the target file exists.
-- `CRON.md` at repo root is a symlink to `<vault>/persona/CRON.md`, and the target file exists (optional - only if user wants scheduled tasks).
+- `<vault>/persona/CRON.md` exists (optional - only if user wants scheduled tasks). No repo-root copy; cron-daemon reads it directly via `$VAULT_PATH`.
 - Vault directory exists (path from `$VAULT_PATH` or `/vault` if running inside Docker).
 - `<vault>/persona/` exists.
 - `<vault>/persona/.claude/skills/kb-impl/` exists (any directory or symlink).
@@ -55,14 +55,19 @@ Write all values to `.env`. If `.env` already has some keys, edit in place rathe
 
 ### 3. CLAUDE.md and CRON.md
 
-Both `CLAUDE.md` (assistant config) and `CRON.md` (scheduled tasks) live in the vault (`<vault>/persona/<NAME>.md`) and are symlinked into the repo root. This keeps personalized config under vault version control alongside `USER.md`, `IDENTITY.md`, `MEMORY.md`, etc., while the repo path stays gitignored.
+Both files store personal config that belongs in the vault, but they're consumed differently:
 
-For each of `CLAUDE.md` and `CRON.md`, dispatch on the current state. `CRON.md` is optional — ask "Want scheduled tasks (daily journal, weekly review, ...)?" before creating it; skip if the user declines.
+- **`CLAUDE.md`** is auto-loaded by Claude Code from cwd, so the repo root must have a copy. We make it a symlink: real file at `<vault>/persona/CLAUDE.md`, repo root has `CLAUDE.md → <vault>/persona/CLAUDE.md` (gitignored).
+- **`CRON.md`** is only read by `bin/cron-daemon.ts`, which resolves `$VAULT_PATH/persona/CRON.md` directly. No repo-root copy needed.
 
-- **Vault file missing AND repo symlink missing**: copy the matching template (`<NAME>.example.md`) to `<vault>/persona/<NAME>.md`, then `ln -s "<vault>/persona/<NAME>.md" <NAME>.md`.
-- **Vault file missing AND repo file is a regular file (not symlink)**: legacy layout. Move the regular file into the vault, then symlink back: `mv <NAME>.md "<vault>/persona/<NAME>.md" && ln -s "<vault>/persona/<NAME>.md" <NAME>.md`. Tell the user what you did.
-- **Vault file exists AND repo symlink missing**: just symlink: `ln -s "<vault>/persona/<NAME>.md" <NAME>.md`.
+**For `CLAUDE.md`**, dispatch on state:
+
+- **Vault file missing AND repo symlink missing**: copy `CLAUDE.example.md` to `<vault>/persona/CLAUDE.md`, then `ln -s "<vault>/persona/CLAUDE.md" CLAUDE.md`.
+- **Vault file missing AND repo file is a regular file (not symlink)**: legacy layout. `mv CLAUDE.md "<vault>/persona/CLAUDE.md" && ln -s "<vault>/persona/CLAUDE.md" CLAUDE.md`. Tell the user what you did.
+- **Vault file exists AND repo symlink missing**: just `ln -s "<vault>/persona/CLAUDE.md" CLAUDE.md`.
 - **Both correct**: skip.
+
+**For `CRON.md`**, ask first: "Want scheduled tasks (daily journal, weekly review, ...)?" If yes and `<vault>/persona/CRON.md` is missing, copy `CRON.example.md` to `<vault>/persona/CRON.md`. No symlink needed. If they decline, skip.
 
 Use the absolute `$VAULT_PATH` from `.env` for the symlink target so it survives `cd` and works inside Docker (the Docker mount aliases `$VAULT_PATH` to `/vault`).
 
