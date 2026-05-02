@@ -7,7 +7,7 @@ You message a Telegram bot; an LLM with access to your knowledge base, calendar,
 ## What it does
 
 - **Chat over Telegram.** Send a text, photo, document, or sticker; the assistant reads it, picks a skill or replies directly, and writes back.
-- **Runs scheduled tasks.** A separate cron daemon reads `TASK.md` and fires prompts on schedule (daily journal, weekly review, mailbox digest, ...).
+- **Runs scheduled tasks.** A separate cron daemon reads `CRON.md` and fires prompts on schedule (daily journal, weekly review, mailbox digest, ...).
 - **Talks to your knowledge base.** A pluggable `/kb` skill - you ship your own implementation against a tiny `put` / `query` / `lint` contract.
 - **Composes with MCP.** Gmail, Google Calendar, Drive, and any other MCP server you wire up are just tools the assistant can pick.
 
@@ -16,7 +16,7 @@ You message a Telegram bot; an LLM with access to your knowledge base, calendar,
 Three independent processes talk to a shared filesystem and persona config:
 
 - `bin/tg-daemon.ts` - long-running Telegram I/O. Owns a persistent `claude -p --input-format stream-json` subprocess that handles every message in the same session.
-- `bin/cron-daemon.ts` - reads `TASK.md`, schedules each task by its cron expression, spawns a one-shot `claude -p` on fire. Auto-reloads on file change.
+- `bin/cron-daemon.ts` - reads `CRON.md`, schedules each task by its cron expression, spawns a one-shot `claude -p` on fire. Auto-reloads on file change.
 - The interactive REPL you `claude` into - heartbeat checks on the two daemons and ad-hoc work.
 
 Skills:

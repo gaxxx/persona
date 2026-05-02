@@ -10,7 +10,7 @@ The assistant runs in **three parallel contexts** that share the same filesystem
 | Context | Scope | Started by |
 |---|---|---|
 | **tg-daemon** (`bin/tg-daemon.ts`) | Telegram I/O - receives Telegram messages and sends replies via a long-lived `claude -p --input-format stream-json` subprocess | `nohup bun run bin/tg-daemon.ts &` |
-| **cron-daemon** (`bin/cron-daemon.ts`) | Scheduled tasks from `TASK.md` (gmail digest, daily journal, morning brief). On fire, spawns a one-shot `claude -p --permission-mode bypassPermissions` to handle the prompt. Auto-reloads on `TASK.md` change. | `nohup bun run bin/cron-daemon.ts &` |
+| **cron-daemon** (`bin/cron-daemon.ts`) | Scheduled tasks from `CRON.md` (gmail digest, daily journal, morning brief). On fire, spawns a one-shot `claude -p --permission-mode bypassPermissions` to handle the prompt. Auto-reloads on `CRON.md` change. | `nohup bun run bin/cron-daemon.ts &` |
 | **Main REPL** (this Claude Code session) | Interactive session for ad-hoc work + daemon health heartbeat | User runs `/loop /assistant-loop` |
 
 ## Channel Discipline (information isolation)
@@ -19,7 +19,7 @@ The assistant runs in **three parallel contexts** that share the same filesystem
 
 - **Telegram message arrives** -> daemon's claude subprocess replies on Telegram (`bun run bin/tg-send.ts <chat_id> "<msg>"`). Don't echo anything to the REPL.
 - **REPL command** typed by your human in this Claude Code session -> reply only in REPL output. Do **not** send a Telegram message unless they explicitly ask ("send to telegram"/"tell me on telegram").
-- **Cron-fired tasks** (gmail digest, daily journal, morning brief) - push results to Telegram per their TASK.md prompt. REPL gets only a brief status line.
+- **Cron-fired tasks** (gmail digest, daily journal, morning brief) - push results to Telegram per their CRON.md prompt. REPL gets only a brief status line.
 - **Heartbeat ticks** - normally silent (just check daemon health + reschedule). **Send Telegram alert** when there's a real issue worth interrupting the user: daemon was dead and got restarted, daemon failed to restart, daemon hasn't processed any message in >1h despite Telegram updates being available, etc. Don't alert for routine ticks.
 
 When in doubt, prefer one channel - the one that originated the request.
@@ -58,7 +58,7 @@ The daemon **only** owns Telegram. It does NOT start a Monitor, does NOT call `b
    ```
    Wait ~6s. Confirm tg-daemon via `grep "priming complete" /tmp/tg-daemon-stderr.log`. Confirm cron-daemon via `grep "loaded . task" /tmp/cron-daemon-stderr.log`.
 
-2. **Re-arm pending reminders** - read `<vault>/persona/tasks.md` for incomplete tasks with future dates. Add them as cron entries in `TASK.md` (cron-daemon picks them up via fs.watch) or send overdue ones immediately via Telegram with a note.
+2. **Re-arm pending reminders** - read `<vault>/persona/tasks.md` for incomplete tasks with future dates. Add them as cron entries in `CRON.md` (cron-daemon picks them up via fs.watch) or send overdue ones immediately via Telegram with a note.
 
 3. Schedule fallback heartbeat via `ScheduleWakeup` (1200s).
 
@@ -78,14 +78,14 @@ Check both daemons.
 
 ## How cron tasks run (background)
 
-The main REPL does NOT see cron fires anymore - they run in independent processes spawned by cron-daemon. Each cron entry in `TASK.md`:
+The main REPL does NOT see cron fires anymore - they run in independent processes spawned by cron-daemon. Each cron entry in `CRON.md`:
 
 - cron-daemon sets a `setTimeout` to its next fire time
 - on fire, cron-daemon spawns `claude -p --permission-mode bypassPermissions <prompt>` with cwd=repo root and inherited env
 - that subprocess does the work (reads CLAUDE.md, hits MCPs, sends Telegram per the prompt) and exits
 - cron-daemon logs the fire to `data/cron.log` and reschedules
 
-If you edit `TASK.md` (add/remove tasks, change cron expression, change prompt), cron-daemon's fs.watch picks it up automatically (500ms debounce). No restart needed. The "Last run" line that each task self-updates is preserved across reloads (cron expression and prompt are the only fields cron-daemon actually reads at schedule time).
+If you edit `CRON.md` (add/remove tasks, change cron expression, change prompt), cron-daemon's fs.watch picks it up automatically (500ms debounce). No restart needed. The "Last run" line that each task self-updates is preserved across reloads (cron expression and prompt are the only fields cron-daemon actually reads at schedule time).
 
 ## Onboarding (first-time setup)
 

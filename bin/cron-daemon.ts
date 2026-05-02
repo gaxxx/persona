@@ -1,14 +1,14 @@
 #!/usr/bin/env bun
 /**
- * Cron daemon: parses TASK.md, schedules each task by its cron expression,
+ * Cron daemon: parses CRON.md, schedules each task by its cron expression,
  * and on fire spawns a one-shot `claude -p --permission-mode bypassPermissions`
  * subprocess to handle it. Decoupled from main REPL and tg-daemon.
  *
- * - TASK.md is the source of truth; auto-reloads on change (fs.watch).
+ * - CRON.md is the source of truth; auto-reloads on change (fs.watch).
  * - Each fire is a fresh `claude -p` session (reads CLAUDE.md + skills, runs
  *   the prompt, exits).
  * - System timezone is used for cron evaluation (assumed to match the comments
- *   in TASK.md, e.g. "ET").
+ *   in CRON.md, e.g. "ET").
  *
  * Run: bun run bin/cron-daemon.ts
  */
@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, readFileSync, watch, appendFileSync } from "fs";
 import { resolve, dirname } from "path";
 
 const ROOT = resolve(import.meta.dir, "..");
-const TASK_FILE = resolve(ROOT, "TASK.md");
+const CRON_FILE = resolve(ROOT, "CRON.md");
 const LOG_FILE = resolve(ROOT, "data/cron.log");
 
 if (!existsSync(dirname(LOG_FILE))) mkdirSync(dirname(LOG_FILE), { recursive: true });
@@ -29,7 +29,7 @@ function log(...parts: unknown[]) {
   process.stdout.write(line);
 }
 
-// ---- TASK.md parser -------------------------------------------------------
+// ---- CRON.md parser -------------------------------------------------------
 
 interface Task {
   id: string;
@@ -212,10 +212,10 @@ async function fireTask(s: Scheduled) {
 function loadAndSchedule() {
   let tasks: Task[];
   try {
-    const content = readFileSync(TASK_FILE, "utf8");
+    const content = readFileSync(CRON_FILE, "utf8");
     tasks = parseTaskMd(content);
   } catch (err) {
-    log(`failed to read ${TASK_FILE}: ${(err as Error).message}`);
+    log(`failed to read ${CRON_FILE}: ${(err as Error).message}`);
     return;
   }
 
@@ -225,7 +225,7 @@ function loadAndSchedule() {
       const s = scheduled.get(id)!;
       if (s.timer) clearTimeout(s.timer);
       scheduled.delete(id);
-      log(`removed ${id} (no longer in TASK.md)`);
+      log(`removed ${id} (no longer in CRON.md)`);
     }
   }
 
@@ -259,10 +259,10 @@ log(`cron-daemon starting (root=${ROOT})`);
 loadAndSchedule();
 
 let reloadDebounce: Timer | undefined;
-watch(TASK_FILE, () => {
+watch(CRON_FILE, () => {
   if (reloadDebounce) clearTimeout(reloadDebounce);
   reloadDebounce = setTimeout(() => {
-    log("TASK.md changed; reloading");
+    log("CRON.md changed; reloading");
     loadAndSchedule();
   }, 500);
 });

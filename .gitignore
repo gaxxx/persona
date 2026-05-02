@@ -6,11 +6,12 @@ data/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 .mcp.json
-TASK.md
 Obsidian
 
-# Per-user CLAUDE.md (template: CLAUDE.example.md)
+# Per-user files - kept in <vault>/persona/ and symlinked into the repo root
+# (templates: CLAUDE.example.md, CRON.example.md). Setup wizard wires this up.
 CLAUDE.md
+CRON.md
 
 # Personal skill content lives in <vault>/persona/.claude/skills/ and is
 # symlinked into .claude/skills/ per-skill by bin/link-skills.sh. The setup
