@@ -36,12 +36,21 @@ claude                # then type:  /setup
 After `/setup` finishes:
 
 ```bash
-docker compose up -d --build              # build + run the container
-docker compose exec persona claude        # attach (run /login first time)
-docker compose exec persona claude /assistant-loop
+docker compose up -d --build              # build + run; auto-starts /assistant-loop
+docker compose logs -f persona            # watch the assistant loop
 ```
 
-`docker compose up` only starts the container - it does **not** start the assistant. `/assistant-loop` is what boots the tg-daemon and cron-daemon. Once that's running, message your bot. See [SETUP.md](./SETUP.md) for the long version.
+The container's `CMD` runs `claude --dangerously-skip-permissions /assistant-loop`, which boots tg-daemon + cron-daemon and self-schedules a heartbeat. Auth carries over from the host's `~/.claude` (mount); if you've never logged in, run `claude /login` on the host once first.
+
+Common ops:
+
+```bash
+docker compose exec persona bash          # ad-hoc shell (don't open a second `claude`)
+docker compose restart persona            # restart the loop
+docker compose down                       # stop
+```
+
+See [SETUP.md](./SETUP.md) for the long version.
 
 ## Why a separate repo per user
 

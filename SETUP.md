@@ -63,9 +63,9 @@ cp CRON.example.md "$VAULT_PATH/persona/CRON.md"
 Then:
 
 ```bash
-# 5. Build and start
+# 5. Build and start (Dockerfile CMD auto-runs `claude /assistant-loop`)
 docker compose up -d --build
-docker compose exec persona claude /assistant-loop
+docker compose logs -f persona              # watch the loop boot
 ```
 
 ## Personal vs generic skills
@@ -96,18 +96,15 @@ A minimal flat-folder example implementation ships at `share/skills/kb/examples/
 
 ## Authenticating Claude Code
 
-The compose file mounts `~/.claude` from the host so a Claude Code subscription session carries through. If you've never logged in:
+The compose file mounts `~/.claude` from the host so a Claude Code subscription session carries through. If you've never logged in, do it on the **host** before `docker compose up`:
 
 ```bash
-docker compose exec persona claude
-# inside the container, run /login and follow the OAuth prompt
+claude /login                               # on the host - writes ~/.claude/.credentials.json
 ```
 
-Then start the assistant loop:
+Then `docker compose up -d --build` will pick up the credentials via the mount and the auto-run `claude /assistant-loop` will boot cleanly.
 
-```bash
-docker compose exec persona claude /assistant-loop
-```
+Don't open a second `claude` session inside the running container (`docker compose exec persona claude`) for routine work — it shares `~/.claude/.credentials.json` with the main loop and one stray `/logout` will deauth both. For ad-hoc shell work, use `docker compose exec persona bash`.
 
 ## First Telegram message
 
@@ -163,9 +160,10 @@ repo/
 ```bash
 docker compose stop                           # stop without removing
 docker compose down                           # stop and remove container
-docker compose up -d                          # start in background
-docker compose logs -f                        # tail logs
-docker compose exec persona claude /assistant-loop  # attach Claude Code inside
+docker compose up -d                          # start in background (auto-runs assistant-loop)
+docker compose restart persona                # restart the loop
+docker compose logs -f persona                # tail the loop's output
+docker compose exec persona bash              # ad-hoc shell (don't open another `claude`)
 ```
 
 ## Troubleshooting

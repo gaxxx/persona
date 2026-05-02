@@ -21,4 +21,8 @@ ENV PATH="/home/bun/.local/bin:${PATH}"
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
 WORKDIR /workspace
-CMD ["claude"]
+# Auto-start the assistant loop on `docker compose up`. The loop boots
+# tg-daemon + cron-daemon and self-schedules a heartbeat. For ad-hoc
+# work, exec a shell - don't open a second `claude` (avoids settings/
+# token races; the main loop owns this session).
+CMD ["claude", "--dangerously-skip-permissions", "/assistant-loop"]
