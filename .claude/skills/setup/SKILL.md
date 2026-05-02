@@ -16,7 +16,7 @@ The goal is one continuous interactive flow that gets a fresh checkout from `git
 Run a quick audit before asking anything. For each item, note done / missing / partial:
 
 - `.env` exists at repo root, and has non-empty `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `VAULT_PATH`, `TZ`.
-- `CLAUDE.md` exists at repo root.
+- `CLAUDE.md` at repo root is a symlink to `<vault>/persona/CLAUDE.md`, and the target file exists.
 - `TASK.md` exists at repo root (optional - only if user wants scheduled tasks).
 - Vault directory exists (path from `$VAULT_PATH` or `/vault` if running inside Docker).
 - `<vault>/persona/` exists.
@@ -55,8 +55,18 @@ Write all values to `.env`. If `.env` already has some keys, edit in place rathe
 
 ### 3. CLAUDE.md and TASK.md
 
-- If `CLAUDE.md` is missing, copy from `CLAUDE.example.md`. Don't overwrite if it exists.
-- Ask: "Want scheduled tasks (daily journal, weekly review, ...)?" If yes, copy `TASK.example.md` -> `TASK.md`.
+`CLAUDE.md` lives in the vault (`<vault>/persona/CLAUDE.md`) and is symlinked into the repo root. This keeps the user's personalized config under vault version control alongside `USER.md`, `IDENTITY.md`, `MEMORY.md`, etc., while the repo's `CLAUDE.md` stays gitignored.
+
+For each case, do the right thing:
+
+- **Vault file missing AND repo symlink missing**: copy `CLAUDE.example.md` to `<vault>/persona/CLAUDE.md`, then `ln -s "<vault>/persona/CLAUDE.md" CLAUDE.md`.
+- **Vault file missing AND repo file is a regular file (not symlink)**: this is the legacy layout. Move the regular file into the vault, then symlink it back: `mv CLAUDE.md "<vault>/persona/CLAUDE.md" && ln -s "<vault>/persona/CLAUDE.md" CLAUDE.md`. Tell the user what you did.
+- **Vault file exists AND repo symlink missing**: just symlink: `ln -s "<vault>/persona/CLAUDE.md" CLAUDE.md`.
+- **Both correct**: skip.
+
+Use the absolute `$VAULT_PATH` from `.env` for the symlink target so it survives `cd` and works inside Docker (the Docker mount aliases `$VAULT_PATH` to `/vault`).
+
+Then ask: "Want scheduled tasks (daily journal, weekly review, ...)?" If yes, copy `TASK.example.md` -> `TASK.md`.
 
 ### 4. Vault skeleton + kb-impl
 
