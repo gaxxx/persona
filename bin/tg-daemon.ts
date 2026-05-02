@@ -14,7 +14,7 @@
  *
  * Run:  bun run bin/tg-daemon.ts
  */
-import { getUpdates, downloadFile, sendTyping } from "./lib/telegram";
+import { getUpdates, downloadFile, sendTyping, sendMessage } from "./lib/telegram";
 import { mkdirSync, existsSync, appendFileSync } from "fs";
 import type { Subprocess } from "bun";
 
@@ -68,7 +68,18 @@ interface ClaudeProc {
   proc: Subprocess<"pipe", "pipe", "pipe">;
   enqueue: (text: string) => Promise<void>;
   shutdown: () => Promise<void>;
+  isDead: () => boolean;
+  getTurns: () => number;
+  spawnedAt: number;
 }
+
+// Rotate the inner claude before context grows unbounded — context is held in
+// RAM as KV cache, and macOS will SIGKILL it under memory pressure (we got
+// burned at 2.7M cached tokens). Whichever fires first.
+const MAX_TURNS = 50;
+const MAX_AGE_MS = 4 * 60 * 60 * 1000;
+const TURN_TIMEOUT_MS = 5 * 60 * 1000;
+const TURN_TIMEOUT_ERR = "turn timeout";
 
 function spawnClaude(): ClaudeProc {
   log("spawning claude subprocess");
@@ -133,13 +144,30 @@ function spawnClaude(): ClaudeProc {
     log("claude stdout closed");
   })();
 
-  proc.exited.then((code) => log("claude exited code=", code));
+  let dead = false;
+  let turns = 0;
+  proc.exited.then((code) => {
+    log("claude exited code=", code);
+    dead = true;
+  });
 
   function enqueue(text: string): Promise<void> {
+    turns++;
     const turn = chain.then(
       () =>
-        new Promise<void>((resolve) => {
-          pendingResolve = resolve;
+        new Promise<void>((resolve, reject) => {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          pendingResolve = () => {
+            if (timer) clearTimeout(timer);
+            resolve();
+          };
+          timer = setTimeout(() => {
+            if (pendingResolve === null) return;
+            pendingResolve = null;
+            log("turn timed out, killing claude");
+            try { proc.kill(); } catch {}
+            reject(new Error(TURN_TIMEOUT_ERR));
+          }, TURN_TIMEOUT_MS);
           const payload = JSON.stringify({ type: "user", message: { role: "user", content: text } }) + "\n";
           proc.stdin.write(enc.encode(payload));
         }),
@@ -160,7 +188,14 @@ function spawnClaude(): ClaudeProc {
     }
   }
 
-  return { proc, enqueue, shutdown };
+  return {
+    proc,
+    enqueue,
+    shutdown,
+    isDead: () => dead,
+    getTurns: () => turns,
+    spawnedAt: Date.now(),
+  };
 }
 
 // ---- Offset persistence ---------------------------------------------------
@@ -177,8 +212,49 @@ async function saveOffset() {
 // ---- Main loop ------------------------------------------------------------
 
 let claude = spawnClaude();
+attachExitHandler(claude);
 await claude.enqueue(PRIMING);
 log("priming complete, entering poll loop");
+
+// If the inner claude dies (e.g. macOS jetsam), respawn proactively instead
+// of waiting for the next Telegram event to notice. Guarded by identity check
+// so a manual rotation in the main loop doesn't trigger a double-spawn.
+function attachExitHandler(c: ClaudeProc) {
+  c.proc.exited.then(async () => {
+    if (claude !== c) return;
+    log("auto-respawning after exit");
+    claude = spawnClaude();
+    attachExitHandler(claude);
+    try {
+      await claude.enqueue(PRIMING);
+    } catch (e) {
+      log("auto-respawn priming failed:", (e as Error).message);
+    }
+  });
+}
+
+async function rotateIfNeeded() {
+  // If the proc died, respawn now. We may race with attachExitHandler — that's
+  // fine, whichever wins reassigns `claude` and the loser's identity check
+  // (`claude !== c`) makes it skip.
+  if (claude.isDead()) {
+    log("claude is dead, respawning (main loop)");
+    claude = spawnClaude();
+    attachExitHandler(claude);
+    await claude.enqueue(PRIMING);
+    return;
+  }
+  const tooOld = Date.now() - claude.spawnedAt > MAX_AGE_MS;
+  const tooMany = claude.getTurns() >= MAX_TURNS;
+  if (tooOld || tooMany) {
+    log(`rotating claude: turns=${claude.getTurns()} ageMs=${Date.now() - claude.spawnedAt}`);
+    const old = claude;
+    claude = spawnClaude();
+    attachExitHandler(claude);
+    await claude.enqueue(PRIMING);
+    old.shutdown().catch((e) => log("old claude shutdown error:", (e as Error).message));
+  }
+}
 
 let stopping = false;
 const stop = async (sig: string) => {
@@ -217,12 +293,7 @@ while (!stopping) {
     const hasSticker = !!m.sticker;
     if (!m.text && !hasPhoto && !hasDoc && !hasSticker) continue;
 
-    // Restart claude if it died between turns.
-    if (claude.proc.exitCode !== null) {
-      log("claude is dead, respawning");
-      claude = spawnClaude();
-      await claude.enqueue(PRIMING);
-    }
+    await rotateIfNeeded();
 
     let attachment: { kind: string; path: string; name?: string; mime?: string } | undefined;
     if (hasPhoto || hasDoc || hasSticker) {
@@ -289,7 +360,12 @@ while (!stopping) {
     try {
       await claude.enqueue(`[Telegram event] ${JSON.stringify(event)}`);
     } catch (err) {
-      log("enqueue failed:", (err as Error).message);
+      const e = err as Error;
+      log("enqueue failed:", e.message);
+      if (e.message === TURN_TIMEOUT_ERR) {
+        sendMessage(m.chat.id, "我处理这条消息卡住了 😔 重发一遍或者换个说法试试？")
+          .catch((se) => log("apology send failed:", (se as Error).message));
+      }
     }
   }
 
