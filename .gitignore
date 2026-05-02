@@ -16,12 +16,11 @@ Obsidian
 CLAUDE.md
 
 # Personal skill content lives in <vault>/persona/.claude/skills/ and is
-# symlinked into .claude/skills/ per-skill by bin/link-skills.sh. The setup
-# skill is tracked so /setup is available on a fresh clone before any vault
-# is wired up.
-.claude/skills/*
-!.claude/skills/setup
-!.claude/skills/setup/**
+# symlinked into .claude/skills/ per-skill by bin/link-skills.sh. None of
+# those symlinks belong in git. /setup is provided as a slash command at
+# .claude/commands/setup.md (tracked) so it works on a fresh clone before
+# any skill symlinks exist.
+.claude/skills/
 
 # Editor swap files
 *.swp

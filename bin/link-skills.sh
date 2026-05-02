@@ -7,8 +7,8 @@
 #      If it exists and differs, show the diff and ask y/N before overwriting.
 #   2. Symlink the vault copy back into <repo>/.claude/skills/<name>.
 #
-# This script does NOT touch personal skills. The 'setup' skill is also
-# excluded - it ships as a tracked real dir at .claude/skills/setup/.
+# This script does NOT touch personal skills. /setup ships separately as
+# a tracked slash command at .claude/commands/setup.md - not a skill.
 #
 # Reads VAULT_PATH from .env (or first positional arg).
 set -euo pipefail

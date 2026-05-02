@@ -20,8 +20,8 @@ Three independent processes talk to a shared filesystem and persona config:
 - The interactive REPL you `claude` into - heartbeat checks on the two daemons and ad-hoc work.
 
 Skills:
-- The `setup` skill is tracked in `.claude/skills/setup/` so `/setup` works the moment you `git clone` - no bootstrap step needed.
-- The remaining shipped skills (`assistant-loop`, `assistant-test`, `kb` interface stub) live as templates in `share/skills/`. `/setup` copies them into `<vault>/persona/.claude/skills/` and symlinks each back into `.claude/skills/`. After that, the vault owns those skills and you can edit them freely. Re-run `./bin/link-skills.sh` after pulling repo changes — it diffs vs your vault copy and asks before overwriting.
+- `/setup` is a tracked slash command at `.claude/commands/setup.md`, so it works the moment you `git clone` - no bootstrap step needed. Nothing else lives under `.claude/` in the repo.
+- The shipped skills (`assistant-loop`, `assistant-test`, `kb` interface stub) live as templates in `share/skills/`. `/setup` copies them into `<vault>/persona/.claude/skills/` and symlinks each back into `.claude/skills/`. After that, the vault owns those skills and you can edit them freely. Re-run `./bin/link-skills.sh` after pulling repo changes — it diffs vs your vault copy and asks before overwriting.
 - Personal skills you author go straight into the vault.
 
 ## Setup

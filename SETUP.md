@@ -78,13 +78,13 @@ docker compose exec persona tmux attach -t loop   # attach (Ctrl-B D to detach)
 | Personal config (vault) | `<vault>/persona/` | `CLAUDE.md`, `CRON.md`, `USER.md`, `IDENTITY.md`, `MEMORY.md`, `tasks.md` | yes (vault is yours) |
 | Personal skills | `<vault>/persona/.claude/skills/` | `kb-impl`, plus anything you write | no (vault is yours) |
 
-`.claude/skills/setup/` is the only skill tracked directly in the repo, so `/setup` works the moment you `git clone` (no symlinks required yet). `bin/link-skills.sh` only manages the shared skills (`assistant-loop`, `assistant-test`, `kb`):
+`/setup` ships as a tracked slash command at `.claude/commands/setup.md`, so it works the moment you `git clone` (no symlinks required yet). Nothing else under `.claude/` is tracked. `bin/link-skills.sh` manages the shared skills (`assistant-loop`, `assistant-test`, `kb`):
 
 1. **Copies** each template from `share/skills/` into `<vault>/persona/.claude/skills/` as a real dir. Your vault becomes the working copy - edit freely.
 2. **Symlinks** that vault copy back into `.claude/skills/<name>`.
 3. Every subsequent run diffs each shared skill against `share/skills/` and asks y/N before overwriting if they differ; in-sync skills stay quiet.
 
-Personal skills are yours to manage. The simplest path is to create them directly in `.claude/skills/<name>/` — `.gitignore` excludes everything there except `setup`, so they stay out of git automatically. If you want a personal skill backed up via your Obsidian vault, write it in `<vault>/persona/.claude/skills/<name>/` and symlink it yourself: `ln -s "$VAULT_PATH/persona/.claude/skills/<name>" .claude/skills/<name>`.
+Personal skills are yours to manage. The simplest path is to create them directly in `.claude/skills/<name>/` — `.gitignore` excludes everything under `.claude/skills/`, so they stay out of git automatically. If you want a personal skill backed up via your Obsidian vault, write it in `<vault>/persona/.claude/skills/<name>/` and symlink it yourself: `ln -s "$VAULT_PATH/persona/.claude/skills/<name>" .claude/skills/<name>`.
 
 ## kb interface vs implementation
 
@@ -130,14 +130,14 @@ repo/
 │   ├── tg-send.ts / tg-typing.ts / tg-pull.ts / tg-watch.ts
 │   ├── cron-daemon.ts          # scheduled-task daemon
 │   └── link-skills.sh          # wires up .claude/skills as a symlink
+├── .claude/commands/setup.md   # tracked - /setup slash command bootstrap
 ├── share/skills/               # generic templates copied into vault on /setup
 │   ├── assistant-loop/
 │   ├── assistant-test/
 │   └── kb/                     # interface stub
 │       └── examples/minimal/   # starter kb-impl
-├── .claude/skills/
-│   ├── setup/                  # tracked - the bootstrap skill
-│   └── <other>@                # per-skill symlinks to vault (gitignored)
+├── .claude/skills/             # all entries are symlinks to vault (gitignored)
+│   └── <name>@                 # populated by bin/link-skills.sh
 ├── .env                        # per-user secrets (gitignored)
 ├── CLAUDE.md@                  # symlink -> <vault>/persona/CLAUDE.md (gitignored)
 └── docker-compose.yml

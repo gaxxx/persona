@@ -1,11 +1,10 @@
 ---
-name: setup
-description: First-time setup for the persona repo. Walks through .env, vault layout, kb-impl, and personal-skill symlinks. Validates the Telegram bot token and chat_id by sending a test message. Idempotent - safe to re-run.
+description: First-time setup for the persona repo - .env, vault layout, kb-impl, personal-skill symlinks. Idempotent.
 ---
 
 # /setup
 
-Use this skill when the user runs `/setup`, says "set this up", "first-time setup", "configure", or you notice they're on a fresh clone (no `.env`, no `CLAUDE.md`).
+Run an interactive first-time setup wizard for the persona repo.
 
 The goal is one continuous interactive flow that gets a fresh checkout from `git clone` to "ready to `/assistant-loop`". Detect what's already done and skip those steps - never overwrite user-edited files without asking.
 
