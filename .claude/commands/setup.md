@@ -89,7 +89,17 @@ If `<vault>/persona/.claude/skills/kb-impl/` is missing:
 
 First-run behavior: for each skill in `share/skills/` (assistant-loop, assistant-test, kb), copy it into the vault as a real dir, then symlink that vault copy back into `.claude/skills/<name>`. The script doesn't touch personal skills - those are the user's to manage. Show the output verbatim.
 
-### 6. Final check + next step
+### 6. Wire up credentials
+
+```bash
+./bin/link-credentials.sh
+```
+
+For each entry in `credentials/` (e.g. `.gmail-mcp/`), symlink it into `$HOME` so tools find it at `~/.gmail-mcp`, etc. Idempotent - safe to re-run after adding a new credential dir. Symlinks (not copies) so OAuth refresh-token rewrites land in the single source of truth.
+
+If `credentials/` doesn't exist yet, the script no-ops. Skip this step if the user has no third-party credentials to wire.
+
+### 7. Final check + next step
 
 Re-run the audit from step 1. Everything should be green. Then tell them:
 
@@ -115,6 +125,7 @@ If they're already inside the running container, skip the docker lines and just 
 - **Pulled repo updates and want them in the vault**: re-run `./bin/link-skills.sh`. For each shared skill that differs, it shows a diff and asks y/N before overwriting. Skills already in sync stay quiet.
 - **Authoring a personal skill**: simplest is to create it directly in `.claude/skills/<name>/` (gitignored). If you want it backed up via the vault, put it under `<vault>/persona/.claude/skills/<name>/` and symlink it yourself - `link-skills.sh` only manages shared skills.
 - **Rotated bot token**: edit `TELEGRAM_BOT_TOKEN` in `.env`, re-run `/setup` - it re-validates.
+- **Added a new credential dir** (e.g. dropped `credentials/.foo-mcp/`): re-run just `./bin/link-credentials.sh`. It's idempotent and only links what's missing.
 
 When re-running, default to "skip if exists" - only ask before overwriting if the user explicitly said they want to redo something.
 
