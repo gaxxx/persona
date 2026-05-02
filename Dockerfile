@@ -1,4 +1,4 @@
-FROM oven/bun:1-debian
+FROM oven/bun:1.2.2-debian
 
 # Node 20 (for npx-based MCP servers like @gongrzhe/server-gmail-autoauth-mcp)
 # + git (Claude Code git operations)
