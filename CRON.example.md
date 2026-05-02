@@ -22,6 +22,21 @@ Source of truth for recurring tasks. The `bin/cron-daemon.ts` process reads this
 
 ---
 
+## upcoming-1h-preview
+
+- **Cron:** `*/20 * * * *` (every 20 min, all day)
+- **Durable:** true
+- **Purpose:** Soft heads-up — scan calendar + tasks.md for events starting in the next ~30 min and ping Telegram once per event. Default-on; remove this section if you don't want it.
+- **Last run:** never
+- **Prompt:**
+
+  ```
+  Upcoming preview (scheduled, task id: upcoming-1h-preview).
+  Run the procedure in assistant-loop SKILL.md § Upcoming Preview. Update the "Last run" line under `## upcoming-1h-preview` in CRON.md when done.
+  ```
+
+---
+
 ## How registration works
 
 `bin/cron-daemon.ts` is a long-running process that owns scheduling:
