@@ -29,6 +29,12 @@ if [ -z "$VAULT_PATH" ]; then
   exit 1
 fi
 
+# Inside the Docker container the host VAULT_PATH isn't mounted; the vault
+# is bind-mounted at /vault. Prefer that when running in-container.
+if [ -d /vault ] && [ ! -d "$VAULT_PATH" ]; then
+  VAULT_PATH=/vault
+fi
+
 VAULT_SKILLS="$VAULT_PATH/persona/.claude/skills"
 REPO_SKILLS="$REPO_ROOT/.claude/skills"
 SHARE="$REPO_ROOT/share/skills"
