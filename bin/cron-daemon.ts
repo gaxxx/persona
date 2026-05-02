@@ -164,6 +164,12 @@ async function fireTask(s: Scheduled) {
   const stderrPath = resolve(RUN_LOG_DIR, `${s.task.id}-${ts}.stderr.log`);
 
   try {
+    // Strip Claude Code session vars so the spawned `claude -p` doesn't
+    // refuse to start as a nested session.
+    const childEnv = { ...process.env };
+    for (const k of Object.keys(childEnv)) {
+      if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) delete childEnv[k];
+    }
     const proc = Bun.spawn(
       [
         "claude",
@@ -174,7 +180,7 @@ async function fireTask(s: Scheduled) {
       ],
       {
         cwd: ROOT,
-        env: { ...process.env },
+        env: childEnv,
         stdout: Bun.file(stdoutPath),
         stderr: Bun.file(stderrPath),
         stdin: "ignore",

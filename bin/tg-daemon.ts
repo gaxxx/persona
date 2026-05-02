@@ -14,7 +14,7 @@
  *
  * Run:  bun run bin/tg-daemon.ts
  */
-import { getUpdates, downloadFile } from "./lib/telegram";
+import { getUpdates, downloadFile, sendTyping } from "./lib/telegram";
 import { mkdirSync, existsSync, appendFileSync } from "fs";
 import type { Subprocess } from "bun";
 
@@ -72,9 +72,16 @@ interface ClaudeProc {
 
 function spawnClaude(): ClaudeProc {
   log("spawning claude subprocess");
+  // Strip Claude Code session vars so the spawned `claude -p` doesn't
+  // refuse to start as a nested session when this daemon was launched
+  // from inside a Claude Code REPL.
+  const childEnv = { ...process.env };
+  for (const k of Object.keys(childEnv)) {
+    if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) delete childEnv[k];
+  }
   const proc = Bun.spawn(
     ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions"],
-    { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+    { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: childEnv },
   );
 
   // Drain stderr to log; we don't gate on it.
@@ -277,6 +284,8 @@ while (!stopping) {
       message_id: m.message_id,
     };
     log("-> telegram event", event);
+    // Show "typing…" immediately so the user knows we're working on it.
+    sendTyping(m.chat.id).catch(() => {});
     try {
       await claude.enqueue(`[Telegram event] ${JSON.stringify(event)}`);
     } catch (err) {
