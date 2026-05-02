@@ -63,9 +63,9 @@ cp CRON.example.md "$VAULT_PATH/persona/CRON.md"
 Then:
 
 ```bash
-# 5. Build and start (Dockerfile CMD auto-runs `claude /assistant-loop`)
+# 5. Build and start (Dockerfile CMD auto-runs `claude /assistant-loop` inside tmux)
 docker compose up -d --build
-docker compose logs -f persona              # watch the loop boot
+docker compose exec persona tmux attach -t loop   # attach (Ctrl-B D to detach)
 ```
 
 ## Personal vs generic skills
@@ -158,12 +158,13 @@ repo/
 ## Stopping / restarting
 
 ```bash
-docker compose stop                           # stop without removing
-docker compose down                           # stop and remove container
-docker compose up -d                          # start in background (auto-runs assistant-loop)
-docker compose restart persona                # restart the loop
-docker compose logs -f persona                # tail the loop's output
-docker compose exec persona bash              # ad-hoc shell (don't open another `claude`)
+docker compose stop                                # stop without removing
+docker compose down                                # stop and remove container
+docker compose up -d                               # start in background (auto-runs assistant-loop in tmux)
+docker compose restart persona                     # restart the loop
+docker compose logs -f persona                     # tail tmux output
+docker compose exec persona tmux attach -t loop    # attach to the live loop (Ctrl-B D to detach)
+docker compose exec persona bash                   # ad-hoc shell (don't open another `claude`)
 ```
 
 ## Troubleshooting

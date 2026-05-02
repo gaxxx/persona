@@ -36,15 +36,16 @@ claude                # then type:  /setup
 After `/setup` finishes:
 
 ```bash
-docker compose up -d --build              # build + run; auto-starts /assistant-loop
-docker compose logs -f persona            # watch the assistant loop
+docker compose up -d --build                          # build + run; auto-starts /assistant-loop in tmux
+docker compose exec persona tmux attach -t loop       # attach to the live loop (Ctrl-B D to detach)
 ```
 
-The container's `CMD` runs `claude --dangerously-skip-permissions /assistant-loop`, which boots tg-daemon + cron-daemon and self-schedules a heartbeat. Auth carries over from the host's `~/.claude` (mount); if you've never logged in, run `claude /login` on the host once first.
+The container's `CMD` runs `claude --dangerously-skip-permissions /assistant-loop` inside a tmux session named `loop`, which boots tg-daemon + cron-daemon and self-schedules a heartbeat. Auth carries over from the host's `~/.claude` (mount); if you've never logged in, run `claude /login` on the host once first.
 
 Common ops:
 
 ```bash
+docker compose logs -f persona            # tail tmux's output without attaching
 docker compose exec persona bash          # ad-hoc shell (don't open a second `claude`)
 docker compose restart persona            # restart the loop
 docker compose down                       # stop
