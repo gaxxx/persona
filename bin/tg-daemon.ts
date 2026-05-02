@@ -355,8 +355,12 @@ while (!stopping) {
       message_id: m.message_id,
     };
     log("-> telegram event", event);
-    // Show "typing…" immediately so the user knows we're working on it.
+    // Telegram's typing indicator decays after ~5s. Refresh it every 4s so
+    // the user keeps seeing "typing…" for the whole turn.
     sendTyping(m.chat.id).catch(() => {});
+    const typingTimer = setInterval(() => {
+      sendTyping(m.chat.id).catch(() => {});
+    }, 4000);
     try {
       await claude.enqueue(`[Telegram event] ${JSON.stringify(event)}`);
     } catch (err) {
@@ -366,6 +370,8 @@ while (!stopping) {
         sendMessage(m.chat.id, "我处理这条消息卡住了 😔 重发一遍或者换个说法试试？")
           .catch((se) => log("apology send failed:", (se as Error).message));
       }
+    } finally {
+      clearInterval(typingTimer);
     }
   }
 
