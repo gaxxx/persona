@@ -5,6 +5,11 @@ services:
     env_file: .env
     environment:
       - TZ=${TZ:-America/New_York}
+      # Override the host-side VAULT_PATH that env_file pulls in.
+      # On the host, VAULT_PATH points at the bind-mount source
+      # (e.g. /volume1/...); inside the container, the vault is
+      # always at /vault. Don't remove this line.
+      - VAULT_PATH=/vault
     volumes:
       # Repo (read-write - assistant edits CLAUDE.md, conversations log, etc.)
       - .:/workspace

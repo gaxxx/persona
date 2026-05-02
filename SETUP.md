@@ -68,6 +68,8 @@ docker compose up -d --build
 docker compose exec persona tmux attach -t loop   # attach (Ctrl-B D to detach)
 ```
 
+**Note on `VAULT_PATH`** — the variable serves two roles. On the host, `${VAULT_PATH}` from `.env` is the bind-mount source (e.g. `/volume1/.../Obsidian`). Inside the container, the vault is always at `/vault`, so `docker-compose.yml` explicitly re-exports `VAULT_PATH=/vault` in the `environment:` block to override what `env_file: .env` would otherwise inject. If you remove that line, the daemons will look for `<vault>/persona/CRON.md` at the host path and fail to start.
+
 ## Personal vs generic skills
 
 | Layer | Lives in | Examples | Tracked? |
@@ -170,6 +172,7 @@ docker compose exec persona bash                   # ad-hoc shell (don't open an
 ## Troubleshooting
 
 - **Bot replies once and stops** - Telegram's `getUpdates` is single-connection. Make sure you don't have a host process holding the bot token while the container also runs.
+- **`cron-daemon: failed to read /<host-path>/persona/CRON.md`** - `docker-compose.yml` is missing the `VAULT_PATH=/vault` override in `environment:`. The host-side `VAULT_PATH` is leaking into the container via `env_file`. Add the override back and `docker compose up -d --force-recreate`.
 - **Cron tasks don't fire on time** - check `data/cron-daemon.log`. Common cause: laptop slept past the scheduled minute. cron-daemon will fire on the next match after wake; sleep is a hard limit.
 - **Cron tasks rejected with "TELEGRAM_CHAT_ID not set"** - bin scripts enforce a chat allowlist; ensure `.env` has `TELEGRAM_CHAT_ID=<your-id>` (or `TELEGRAM_CHAT_IDS=id1,id2` for multi-user).
 - **Vault writes don't show up in Obsidian** - Google Drive bind-mounts on macOS sometimes lag a few seconds. Force-sync the Drive client or wait.
