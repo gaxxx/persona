@@ -139,6 +139,7 @@ export interface TelegramMessage {
   voice?: { file_id: string };
   document?: { file_id: string; file_name?: string; mime_type?: string };
   sticker?: { file_id: string; emoji?: string; is_animated?: boolean; is_video?: boolean };
+  media_group_id?: string;
   reply_to_message?: TelegramMessage;
 }
 

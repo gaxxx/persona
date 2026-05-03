@@ -14,7 +14,7 @@
  *
  * Run:  bun run bin/tg-daemon.ts
  */
-import { getUpdates, downloadFile, sendTyping, sendMessage } from "./lib/telegram";
+import { getUpdates, downloadFile, sendTyping, sendMessage, type TelegramMessage } from "./lib/telegram";
 import { mkdirSync, existsSync, appendFileSync } from "fs";
 import type { Subprocess } from "bun";
 
@@ -51,7 +51,9 @@ const PRIMING = `You are a personal assistant running inside a long-lived daemon
 Each user turn I send you is one Telegram event in this exact form:
   [Telegram event] {"chat_id":..., "from":"...", "text":"...", "attachment":{kind,path,name?,mime?}|undefined, "date":"...", "message_id":...}
 
-If \`attachment\` is set, the user attached a file. \`kind\` is "photo" / "document" / "sticker". \`path\` is a relative path under data/attachments/. Read it with the Read tool - Read supports images and PDFs natively. Stickers may be webp/tgs/webm; for tgs/webm just acknowledge the sticker (use \`name\` if it's an emoji). \`text\` is caption or a placeholder if none.
+If \`attachment\` is set, the user attached a single file. \`kind\` is "photo" / "document" / "sticker". \`path\` is a relative path under data/attachments/. Read it with the Read tool - Read supports images and PDFs natively. Stickers may be webp/tgs/webm; for tgs/webm just acknowledge the sticker (use \`name\` if it's an emoji). \`text\` is caption or a placeholder if none.
+
+If \`attachments\` (plural array) is set instead, the user sent multiple files at once as a Telegram media group (e.g. 2-10 photos in a single send). Each entry has the same shape as \`attachment\`. Read all of them with the Read tool and treat them as one user turn — the caption (if any) is in \`text\` and applies to the whole group.
 
 If \`reply_to\` is set, the user is replying to an earlier message. Use it as context for what they're responding to. If \`reply_to.from_bot\` is true, that prior message was from you - find it in data/conversations/YYYY-MM-DD.md to recover full context. If the replied-to had an attachment that was previously processed by this daemon, the file is at data/attachments/<reply_to.message_id>.* - Read it if relevant.
 
@@ -287,6 +289,125 @@ async function rotateIfNeeded() {
   }
 }
 
+// ---- Attachment + media-group helpers -------------------------------------
+
+interface PendingAttachment { kind: string; path: string; name?: string; mime?: string }
+
+async function downloadAttachment(m: TelegramMessage): Promise<PendingAttachment | undefined> {
+  const hasPhoto = !!(m.photo && m.photo.length > 0);
+  const hasDoc = !!m.document;
+  const hasSticker = !!m.sticker;
+  if (!hasPhoto && !hasDoc && !hasSticker) return undefined;
+  if (!existsSync("data/attachments")) mkdirSync("data/attachments", { recursive: true });
+  if (hasPhoto) {
+    const largest = m.photo![m.photo!.length - 1];
+    const path = `data/attachments/${m.message_id}.jpg`;
+    try { await downloadFile(largest.file_id, path); return { kind: "photo", path }; }
+    catch (err) { log("photo download failed:", (err as Error).message); }
+  } else if (hasDoc) {
+    const doc = m.document!;
+    const name = doc.file_name ?? `${m.message_id}`;
+    const path = `data/attachments/${m.message_id}-${name}`;
+    try { await downloadFile(doc.file_id, path); return { kind: "document", path, name, mime: doc.mime_type }; }
+    catch (err) { log("document download failed:", (err as Error).message); }
+  } else if (hasSticker) {
+    const s = m.sticker!;
+    const ext = s.is_video ? "webm" : s.is_animated ? "tgs" : "webp";
+    const path = `data/attachments/${m.message_id}.${ext}`;
+    try { await downloadFile(s.file_id, path); return { kind: "sticker", path, name: s.emoji }; }
+    catch (err) { log("sticker download failed:", (err as Error).message); }
+  }
+  return undefined;
+}
+
+async function dispatch(m: TelegramMessage, attachments: PendingAttachment[]): Promise<void> {
+  await rotateIfNeeded();
+  let replyTo;
+  if (m.reply_to_message) {
+    const r = m.reply_to_message;
+    const kind = r.photo?.length ? "photo" : r.document ? "document" : r.sticker ? "sticker" : undefined;
+    replyTo = {
+      message_id: r.message_id,
+      from_bot: r.from?.is_bot === true,
+      text: r.text || r.caption || (kind ? `[${kind}]` : ""),
+      attachment_kind: kind,
+      attachment_name: r.document?.file_name,
+    };
+  }
+  const first = attachments[0];
+  const placeholder = first
+    ? `[${first.kind}${attachments.length > 1 ? ` x${attachments.length}` : ""}]`
+    : "";
+  const event: Record<string, unknown> = {
+    chat_id: m.chat.id,
+    from: m.from
+      ? `${m.from.first_name}${m.from.username ? ` (@${m.from.username})` : ""}`
+      : "unknown",
+    text: m.text || m.caption || placeholder,
+    reply_to: replyTo,
+    date: new Date(m.date * 1000).toISOString(),
+    message_id: m.message_id,
+  };
+  if (attachments.length === 1) event.attachment = attachments[0];
+  else if (attachments.length > 1) event.attachments = attachments;
+  log("-> telegram event", event);
+  sendTyping(m.chat.id).catch(() => {});
+  const typingTimer = setInterval(() => { sendTyping(m.chat.id).catch(() => {}); }, 4000);
+  try {
+    await claude.enqueue(`[Telegram event] ${JSON.stringify(event)}`);
+  } catch (err) {
+    const e = err as Error;
+    log("enqueue failed:", e.message);
+    if (e.message === TURN_TIMEOUT_ERR) {
+      sendMessage(m.chat.id, "我处理这条消息卡住了 😔 重发一遍或者换个说法试试？")
+        .catch((se) => log("apology send failed:", (se as Error).message));
+    }
+  } finally {
+    clearInterval(typingTimer);
+  }
+}
+
+// Telegram delivers media groups (multi-photo sends) as N separate Updates
+// sharing media_group_id. Buffer them so the inner claude sees one turn
+// with all attachments instead of N single-photo turns.
+const MEDIA_GROUP_DEBOUNCE_MS = 800;
+interface MediaGroupBuf {
+  first: TelegramMessage;
+  attachments: PendingAttachment[];
+  timer: ReturnType<typeof setTimeout>;
+}
+const mediaGroups = new Map<string, MediaGroupBuf>();
+
+function bufferMediaGroup(m: TelegramMessage, att: PendingAttachment | undefined) {
+  const key = `${m.chat.id}:${m.media_group_id}`;
+  const existing = mediaGroups.get(key);
+  if (existing) {
+    if (att) existing.attachments.push(att);
+    // Telegram puts the caption on whichever message the user wrote it on
+    // (usually the first); preserve any caption we see on the buffer's `first`.
+    if (!existing.first.caption && !existing.first.text && (m.caption || m.text)) {
+      existing.first = { ...existing.first, caption: m.caption ?? existing.first.caption, text: m.text ?? existing.first.text };
+    }
+    clearTimeout(existing.timer);
+    existing.timer = setTimeout(() => fireMediaGroup(key), MEDIA_GROUP_DEBOUNCE_MS);
+    return;
+  }
+  const buf: MediaGroupBuf = {
+    first: m,
+    attachments: att ? [att] : [],
+    timer: setTimeout(() => fireMediaGroup(key), MEDIA_GROUP_DEBOUNCE_MS),
+  };
+  mediaGroups.set(key, buf);
+}
+
+function fireMediaGroup(key: string) {
+  const buf = mediaGroups.get(key);
+  if (!buf) return;
+  mediaGroups.delete(key);
+  log(`media group ${key} firing with ${buf.attachments.length} attachment(s)`);
+  dispatch(buf.first, buf.attachments).catch((e) => log("media group dispatch error:", (e as Error).message));
+}
+
 let stopping = false;
 const stop = async (sig: string) => {
   if (stopping) return;
@@ -324,86 +445,17 @@ while (!stopping) {
     const hasSticker = !!m.sticker;
     if (!m.text && !hasPhoto && !hasDoc && !hasSticker) continue;
 
-    await rotateIfNeeded();
+    const att = await downloadAttachment(m);
 
-    let attachment: { kind: string; path: string; name?: string; mime?: string } | undefined;
-    if (hasPhoto || hasDoc || hasSticker) {
-      if (!existsSync("data/attachments")) mkdirSync("data/attachments", { recursive: true });
-    }
-    if (hasPhoto) {
-      const largest = m.photo![m.photo!.length - 1];
-      const path = `data/attachments/${m.message_id}.jpg`;
-      try {
-        await downloadFile(largest.file_id, path);
-        attachment = { kind: "photo", path };
-      } catch (err) {
-        log("photo download failed:", (err as Error).message);
-      }
-    } else if (hasDoc) {
-      const doc = m.document!;
-      const name = doc.file_name ?? `${m.message_id}`;
-      const path = `data/attachments/${m.message_id}-${name}`;
-      try {
-        await downloadFile(doc.file_id, path);
-        attachment = { kind: "document", path, name, mime: doc.mime_type };
-      } catch (err) {
-        log("document download failed:", (err as Error).message);
-      }
-    } else if (hasSticker) {
-      const s = m.sticker!;
-      const ext = s.is_video ? "webm" : s.is_animated ? "tgs" : "webp";
-      const path = `data/attachments/${m.message_id}.${ext}`;
-      try {
-        await downloadFile(s.file_id, path);
-        attachment = { kind: "sticker", path, name: s.emoji };
-      } catch (err) {
-        log("sticker download failed:", (err as Error).message);
-      }
-    }
-
-    let replyTo;
-    if (m.reply_to_message) {
-      const r = m.reply_to_message;
-      const kind = r.photo?.length ? "photo" : r.document ? "document" : r.sticker ? "sticker" : undefined;
-      replyTo = {
-        message_id: r.message_id,
-        from_bot: r.from?.is_bot === true,
-        text: r.text || r.caption || (kind ? `[${kind}]` : ""),
-        attachment_kind: kind,
-        attachment_name: r.document?.file_name,
-      };
-    }
-
-    const event = {
-      chat_id: m.chat.id,
-      from: m.from
-        ? `${m.from.first_name}${m.from.username ? ` (@${m.from.username})` : ""}`
-        : "unknown",
-      text: m.text || m.caption || (attachment ? `[${attachment.kind}]` : ""),
-      attachment,
-      reply_to: replyTo,
-      date: new Date(m.date * 1000).toISOString(),
-      message_id: m.message_id,
-    };
-    log("-> telegram event", event);
-    // Telegram's typing indicator decays after ~5s. Refresh it every 4s so
-    // the user keeps seeing "typing…" for the whole turn.
-    sendTyping(m.chat.id).catch(() => {});
-    const typingTimer = setInterval(() => {
+    if (m.media_group_id) {
+      bufferMediaGroup(m, att);
+      // Show typing now; the eventual dispatch will refresh it. The group
+      // arrives within ms, fires ~800ms later — well within typing TTL.
       sendTyping(m.chat.id).catch(() => {});
-    }, 4000);
-    try {
-      await claude.enqueue(`[Telegram event] ${JSON.stringify(event)}`);
-    } catch (err) {
-      const e = err as Error;
-      log("enqueue failed:", e.message);
-      if (e.message === TURN_TIMEOUT_ERR) {
-        sendMessage(m.chat.id, "我处理这条消息卡住了 😔 重发一遍或者换个说法试试？")
-          .catch((se) => log("apology send failed:", (se as Error).message));
-      }
-    } finally {
-      clearInterval(typingTimer);
+      continue;
     }
+
+    await dispatch(m, att ? [att] : []);
   }
 
   if (updates.length > 0) await saveOffset();
