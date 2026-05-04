@@ -5,11 +5,37 @@ const API = `https://api.telegram.org/bot${TOKEN}`;
 
 // --- Telegram Bot API ---
 
-export async function callApi<T>(method: string, body?: Record<string, unknown>): Promise<T> {
-  const res = await fetch(`${API}/${method}`, {
+// Wrap fetch with an AbortController-based timeout. Without this, a stuck
+// connection (e.g. server-side hang, NAT idle, Conflict-induced limbo from
+// another getUpdates caller) blocks the daemon's poll loop forever.
+async function fetchWithTimeout(
+  input: string | URL,
+  init: RequestInit & { timeoutMs?: number } = {},
+): Promise<Response> {
+  const { timeoutMs = 30_000, signal: parentSignal, ...rest } = init;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(new Error(`fetch timeout after ${timeoutMs}ms`)), timeoutMs);
+  if (parentSignal) {
+    if (parentSignal.aborted) ctrl.abort(parentSignal.reason);
+    else parentSignal.addEventListener("abort", () => ctrl.abort(parentSignal.reason), { once: true });
+  }
+  try {
+    return await fetch(input, { ...rest, signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+export async function callApi<T>(
+  method: string,
+  body?: Record<string, unknown>,
+  timeoutMs?: number,
+): Promise<T> {
+  const res = await fetchWithTimeout(`${API}/${method}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
+    timeoutMs,
   });
   const json = (await res.json()) as { ok: boolean; result: T; description?: string };
   if (!json.ok) throw new Error(`Telegram ${method}: ${json.description ?? res.statusText}`);
@@ -17,11 +43,14 @@ export async function callApi<T>(method: string, body?: Record<string, unknown>)
 }
 
 export async function getUpdates(offset: number, timeout = 5) {
-  return callApi<TelegramUpdate[]>("getUpdates", {
-    offset,
-    timeout,
-    allowed_updates: ["message"],
-  });
+  // Client-side timeout = server long-poll timeout + 10s grace. Telegram
+  // should close the connection after `timeout` seconds; the extra 10s
+  // covers TLS/network slack while still bounding hangs.
+  return callApi<TelegramUpdate[]>(
+    "getUpdates",
+    { offset, timeout, allowed_updates: ["message"] },
+    (timeout + 10) * 1000,
+  );
 }
 
 export async function sendTyping(chatId: number): Promise<void> {
@@ -53,7 +82,7 @@ export async function sendPhoto(chatId: number, filePath: string, caption?: stri
   form.append("chat_id", String(chatId));
   form.append("photo", Bun.file(filePath));
   if (caption) form.append("caption", caption);
-  const res = await fetch(`${API}/sendPhoto`, { method: "POST", body: form });
+  const res = await fetchWithTimeout(`${API}/sendPhoto`, { method: "POST", body: form, timeoutMs: 60_000 });
   const json = (await res.json()) as { ok: boolean; description?: string };
   if (!json.ok) throw new Error(`Telegram sendPhoto: ${json.description}`);
 }
@@ -65,7 +94,7 @@ export async function getFileUrl(fileId: string): Promise<string> {
 
 export async function downloadFile(fileId: string, destPath: string): Promise<void> {
   const url = await getFileUrl(fileId);
-  const res = await fetch(url);
+  const res = await fetchWithTimeout(url, { timeoutMs: 60_000 });
   await Bun.write(destPath, res);
 }
 
