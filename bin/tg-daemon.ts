@@ -15,12 +15,16 @@
  * Run:  bun run bin/tg-daemon.ts
  */
 import { getUpdates, downloadFile, sendTyping, sendMessage, type TelegramMessage } from "./lib/telegram";
-import { mkdirSync, existsSync, appendFileSync } from "fs";
+import { mkdirSync, existsSync, appendFileSync, statSync, readFileSync } from "fs";
 import type { Subprocess } from "bun";
 
 const OFFSET_FILE = "data/tg-offset.json";
 const LOG_FILE = "data/daemon.log";
 const LONG_POLL_TIMEOUT = 25;
+// Cap external-writes payload to keep event JSON sane. If an unusually huge
+// cron output appears between turns, the payload gets truncated and claude
+// can re-read the file if needed (the truncated marker is unmistakable).
+const MAX_EXTERNAL_WRITES_BYTES = 4096;
 
 // Allowlist: only accept messages from these chat IDs. Set TELEGRAM_CHAT_ID
 // (single id) or TELEGRAM_CHAT_IDS (comma-separated). Empty = reject everything.
@@ -60,6 +64,14 @@ If \`reply_to\` is set, the user is replying to an earlier message. Use it as co
 Read CLAUDE.md (in cwd) for behaviour. Use the assistant-loop skill mechanics:
 read identity/user/conversation context, route to skills/MCP tools, reply via
 \`bun run bin/tg-send.ts <chat_id> "<msg>"\`, log to data/conversations/YYYY-MM-DD.md.
+
+Conversation log loading discipline (overrides the skill's "always load" step):
+- FIRST turn after spawn: read today's conversation log as the skill requires.
+- SUBSEQUENT turns: do NOT re-read the full log by default — your in-context memory of prior turns covers it. Re-read only when one of:
+  (a) the user references past events ("yesterday" / "earlier" / "我之前说过" / "上次" / etc),
+  (b) \`reply_to.from_bot=true\` (find the original message),
+  (c) the event JSON contains an \`external_writes_since_last_turn\` field — those lines were written by other processes (typically cron tasks) since your last turn. Treat them as already-read context. The field's content is the raw appended text from the conversation log; you don't need to Read the file to find it. If it ends with a "[TRUNCATED N bytes …]" marker, then Read the file to get the rest.
+- TRIVIAL messages (pure greetings like "你好" / "thanks" / "👍", or questions answerable from USER.md alone like "我在哪个时区"): skip reading the log entirely, even on the first turn — answer directly and call tg-send.
 
 Do NOT start a Monitor or any watcher - the daemon owns Telegram polling.
 Do NOT call tg-pull.ts.
@@ -289,6 +301,58 @@ async function rotateIfNeeded() {
   }
 }
 
+// ---- Conversation log: external-write detection ---------------------------
+
+// Track the file size daemon has "accounted for" per date. Anything that
+// appeared between (last accounted-for size) and (current size at start of
+// next event) was written by another process — typically a cron task.
+const lastSeenLogSizes: Record<string, number> = {};
+
+function todayLogPath(): { date: string; path: string } {
+  const date = new Date().toISOString().slice(0, 10);
+  return { date, path: `data/conversations/${date}.md` };
+}
+
+function currentLogSize(path: string): number {
+  try { return statSync(path).size; } catch { return 0; }
+}
+
+// Read newly-appended bytes since last seen. Returns null if no growth or
+// if this is the first time we're seeing the date (baseline). Updates
+// lastSeenLogSizes to the current size before returning.
+function readExternalWritesSinceLastTurn(): string | null {
+  const { date, path } = todayLogPath();
+  const size = currentLogSize(path);
+  const last = lastSeenLogSizes[date];
+  if (last === undefined) {
+    // First check for this date — establish baseline, no diff to report.
+    lastSeenLogSizes[date] = size;
+    return null;
+  }
+  if (size <= last) return null;
+  let chunk: string;
+  try {
+    const buf = readFileSync(path);
+    chunk = buf.subarray(last).toString("utf-8");
+  } catch {
+    lastSeenLogSizes[date] = size;
+    return null;
+  }
+  lastSeenLogSizes[date] = size;
+  if (chunk.length > MAX_EXTERNAL_WRITES_BYTES) {
+    return chunk.slice(0, MAX_EXTERNAL_WRITES_BYTES) + `\n…[TRUNCATED ${chunk.length - MAX_EXTERNAL_WRITES_BYTES} bytes — Read the file for the rest]`;
+  }
+  return chunk || null;
+}
+
+// Mark current log size as fully consumed. Call after claude finishes a
+// turn so its own writes (incoming + outgoing logging) don't get re-flagged
+// as external on the next turn.
+function noteLogConsumed(): void {
+  const { date, path } = todayLogPath();
+  lastSeenLogSizes[date] = currentLogSize(path);
+}
+
 // ---- Attachment + media-group helpers -------------------------------------
 
 interface PendingAttachment { kind: string; path: string; name?: string; mime?: string }
@@ -350,11 +414,16 @@ async function dispatch(m: TelegramMessage, attachments: PendingAttachment[]): P
   };
   if (attachments.length === 1) event.attachment = attachments[0];
   else if (attachments.length > 1) event.attachments = attachments;
+  const externalWrites = readExternalWritesSinceLastTurn();
+  if (externalWrites) event.external_writes_since_last_turn = externalWrites;
   log("-> telegram event", event);
   sendTyping(m.chat.id).catch(() => {});
   const typingTimer = setInterval(() => { sendTyping(m.chat.id).catch(() => {}); }, 4000);
   try {
     await claude.enqueue(`[Telegram event] ${JSON.stringify(event)}`);
+    // After claude's turn (incl. its own log writes), reset baseline so its
+    // writes don't get re-flagged as external on the next turn.
+    noteLogConsumed();
   } catch (err) {
     const e = err as Error;
     log("enqueue failed:", e.message);
