@@ -39,7 +39,10 @@ Steps when handling an event:
 
 1. Send typing indicator: `bun run bin/tg-typing.ts <chat_id>`
 2. **Log incoming** - append to `data/conversations/YYYY-MM-DD.md`.
-3. **Load conversation context** - read recent conversation files (today + recent days). If total < 10K chars include all; otherwise summarize older days and keep today verbatim.
+3. **Load conversation context** (lazy — the daemon's PRIMING enforces this):
+   - **First turn after subprocess spawn**: read today's conversation file. If <10K chars include all; otherwise summarize older days and keep today verbatim.
+   - **Subsequent turns**: do NOT re-read by default — your in-context memory of prior turns covers it. Re-read only when (a) the user references past events ("yesterday" / "earlier" / "我之前说过" / "上次"), (b) `reply_to.from_bot=true`, or (c) the event JSON contains an `external_writes_since_last_turn` field — that's the daemon telling you a cron task (or another process) wrote to the log between your turns; treat the field's content as already-read context, no Read needed (unless it ends with a TRUNCATED marker).
+   - **Trivial messages** (greetings like "你好" / "thanks" / "👍", or USER.md-derivable questions like "我在哪个时区"): skip the log entirely, even on the first turn.
 4. **If `attachment` set** - Read it via the Read tool (Read supports images and PDFs natively).
 5. **If `reply_to` set** - Use as context for what the user is responding to. If `reply_to.from_bot` is true, find that earlier message in `data/conversations/` for full context. If the replied-to had an attachment, look in `data/attachments/<reply_to.message_id>.*`.
 6. If onboarding not done (`USER.md` has "not set" fields) -> run onboarding flow.
