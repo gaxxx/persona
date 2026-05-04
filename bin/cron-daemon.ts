@@ -40,7 +40,11 @@ function log(...parts: unknown[]) {
 interface Task {
   id: string;
   cron: string;
-  prompt: string;
+  // "prompt" tasks are run via `claude -p <body>`; "shell" tasks are run via
+  // `sh -c <body>` directly, skipping the LLM. Prefer Shell for deterministic
+  // tasks (watchdogs, wrapper-script invocations) where claude adds no value.
+  kind: "prompt" | "shell";
+  body: string;
 }
 
 function parseTaskMd(content: string): Task[] {
@@ -54,14 +58,25 @@ function parseTaskMd(content: string): Task[] {
     const body = lines.slice(1).join("\n");
     const cronMatch = body.match(/^- \*\*Cron:\*\*\s*`([^`]+)`/m);
     if (!cronMatch) continue;
-    // Prompt block: from "**Prompt:**" through the next "---" or EOF, take fenced code
+    // Prefer Shell over Prompt if both are present (Shell wins, no LLM cost).
+    const shellIdx = body.search(/^- \*\*Shell:\*\*/m);
     const promptIdx = body.search(/^- \*\*Prompt:\*\*/m);
-    if (promptIdx < 0) continue;
-    const after = body.slice(promptIdx);
-    const fenceMatch = after.match(/```\s*\n([\s\S]*?)\n\s*```/);
+    let kind: "prompt" | "shell";
+    let bodyIdx: number;
+    if (shellIdx >= 0) {
+      kind = "shell";
+      bodyIdx = shellIdx;
+    } else if (promptIdx >= 0) {
+      kind = "prompt";
+      bodyIdx = promptIdx;
+    } else {
+      continue;
+    }
+    const after = body.slice(bodyIdx);
+    const fenceMatch = after.match(/```\s*\n?([\s\S]*?)\n?\s*```/);
     if (!fenceMatch) continue;
-    const prompt = fenceMatch[1].trim();
-    tasks.push({ id, cron: cronMatch[1].trim(), prompt });
+    const taskBody = fenceMatch[1].trim();
+    tasks.push({ id, cron: cronMatch[1].trim(), kind, body: taskBody });
   }
   return tasks;
 }
@@ -197,22 +212,16 @@ async function fireTask(s: Scheduled) {
     for (const k of Object.keys(childEnv)) {
       if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) delete childEnv[k];
     }
-    const proc = Bun.spawn(
-      [
-        "claude",
-        "-p",
-        s.task.prompt,
-        "--permission-mode",
-        "bypassPermissions",
-      ],
-      {
-        cwd: ROOT,
-        env: childEnv,
-        stdout: Bun.file(stdoutPath),
-        stderr: Bun.file(stderrPath),
-        stdin: "ignore",
-      },
-    );
+    const cmd = s.task.kind === "shell"
+      ? ["sh", "-c", s.task.body]
+      : ["claude", "-p", s.task.body, "--permission-mode", "bypassPermissions"];
+    const proc = Bun.spawn(cmd, {
+      cwd: ROOT,
+      env: childEnv,
+      stdout: Bun.file(stdoutPath),
+      stderr: Bun.file(stderrPath),
+      stdin: "ignore",
+    });
     const [exitCode] = await Promise.all([proc.exited]);
     const elapsed = ((Date.now() - start) / 1000).toFixed(1);
     // Tail of stdout (last ~400 chars) into cron.log for quick scanning.
@@ -268,8 +277,12 @@ function loadAndSchedule() {
   for (const task of tasks) {
     const existing = scheduled.get(task.id);
     if (existing) {
-      // Only reschedule if cron or prompt changed
-      if (existing.task.cron === task.cron && existing.task.prompt === task.prompt) {
+      // Only reschedule if cron, kind, or body changed.
+      if (
+        existing.task.cron === task.cron &&
+        existing.task.kind === task.kind &&
+        existing.task.body === task.body
+      ) {
         continue;
       }
       if (existing.timer) clearTimeout(existing.timer);

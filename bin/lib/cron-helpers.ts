@@ -76,6 +76,21 @@ export async function tgSend(chatId: number | string, message: string): Promise<
   await sendMessage(Number(chatId), message);
 }
 
+/**
+ * Default Telegram chat for cron tasks — read from TELEGRAM_CHAT_ID in .env.
+ * If TELEGRAM_CHAT_IDS (comma-separated) is set, the first id is used.
+ * Throws loudly if neither is set; cron tasks should fail fast rather than
+ * silently drop notifications.
+ */
+export function defaultChatId(): string {
+  const raw = process.env.TELEGRAM_CHAT_IDS ?? process.env.TELEGRAM_CHAT_ID ?? "";
+  const first = raw.split(",")[0].trim();
+  if (!first) {
+    throw new Error("TELEGRAM_CHAT_ID (or TELEGRAM_CHAT_IDS) not set in .env");
+  }
+  return first;
+}
+
 export function logToConversation(message: string): void {
   const { date, hm } = etDateAndHm();
   const path = resolve(ROOT, `data/conversations/${date}.md`);

@@ -23,6 +23,7 @@ import {
   extractJson,
   tgSend,
   logToConversation,
+  defaultChatId,
 } from "./lib/cron-helpers";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -33,7 +34,7 @@ if (!VAULT) {
 }
 
 const DEDUP_PATH = resolve(ROOT, "data/gmail-notified.json");
-const CHAT_ID = "7504317155";
+const CHAT_ID = defaultChatId();
 const WINDOW_MIN = 60;
 const PRUNE_DAYS = 7;
 

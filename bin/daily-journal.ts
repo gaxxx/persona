@@ -24,6 +24,7 @@ import {
   runClaude,
   tgSend,
   logToConversation,
+  defaultChatId,
 } from "./lib/cron-helpers";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -32,7 +33,7 @@ if (!VAULT) {
   console.error("VAULT_PATH is required (set in .env)");
   process.exit(1);
 }
-const CHAT_ID = "7504317155";
+const CHAT_ID = defaultChatId();
 
 interface JournalResult {
   full_md: string;
