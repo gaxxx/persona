@@ -2,30 +2,24 @@
 /**
  * upcoming.ts — deterministic wrapper for the upcoming-1h-preview cron.
  *
- * Replaces the inline LLM-everything prompt. The wrapper owns dedup, quiet
- * hours, sending, and persisting; the LLM is only invoked to fetch calendar
- * events as JSON. Skips the claude spawn entirely during deep quiet (01-07 ET)
- * to cut overnight token waste.
+ * Owns dedup, quiet hours, send, persist. Calendar events are fetched via
+ * direct Google Calendar API (no `claude -p`) using the refresh token in
+ * ~/.gmail-mcp/credentials.json. Skips work entirely during deep quiet
+ * (01-07 ET) — keeps the script ~free overnight.
  *
  * Final stdout line is the 1-line summary cron-daemon stamps into CRON.md
  * "Last run".
- *
- * TODO: when ~/.gmail-mcp/credentials.json is re-granted with
- * calendar.readonly scope, replace fetchCalendarViaClaude() with a direct
- * Google Calendar API call. That eliminates the ~700K cache_creation per
- * fire entirely.
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { resolve, dirname } from "path";
 import { createHash } from "crypto";
 import {
   etIsoNow,
-  runClaude,
-  extractJson,
   tgSend,
   logToConversation,
   defaultChatId,
 } from "./lib/cron-helpers";
+import { getAccessToken } from "./lib/google-auth";
 
 const ROOT = resolve(import.meta.dir, "..");
 const VAULT = process.env.VAULT_PATH;
@@ -100,15 +94,35 @@ interface CalEvent {
   location?: string;
 }
 
-async function fetchCalendarViaClaude(now: Date): Promise<CalEvent[]> {
+interface GcalApiItem {
+  id: string;
+  summary?: string;
+  location?: string;
+  start?: { dateTime?: string; date?: string };
+}
+
+async function fetchCalendar(now: Date): Promise<CalEvent[]> {
+  const token = await getAccessToken();
   const tMin = now.toISOString();
   const tMax = new Date(now.getTime() + WINDOW_MIN * 60 * 1000).toISOString();
-  const prompt = `Non-interactive task. Call mcp__claude_ai_Google_Calendar__list_events with timeMin="${tMin}", timeMax="${tMax}", singleEvents=true, orderBy="startTime", maxResults=20.
-Output ONLY this JSON, no prose, no markdown fences:
-{"events":[{"id":"<event.id>","summary":"<event.summary>","startIso":"<event.start.dateTime or .date>","location":"<event.location or empty>"}]}
-If the call returns no items, output {"events":[]}.`;
-  const out = await runClaude(prompt, 90 * 1000);
-  return extractJson<{ events: CalEvent[] }>(out).events ?? [];
+  const url =
+    `https://www.googleapis.com/calendar/v3/calendars/primary/events` +
+    `?timeMin=${encodeURIComponent(tMin)}&timeMax=${encodeURIComponent(tMax)}` +
+    `&singleEvents=true&orderBy=startTime&maxResults=20`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(`calendar api ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
+  const body = (await res.json()) as { items?: GcalApiItem[] };
+  const items = body.items ?? [];
+  return items.map((it) => ({
+    id: it.id,
+    summary: it.summary ?? "(no title)",
+    startIso: it.start?.dateTime ?? it.start?.date ?? "",
+    location: it.location,
+  }));
 }
 
 interface TaskCand {
@@ -200,7 +214,7 @@ async function main(): Promise<void> {
 
   let calEvents: CalEvent[] = [];
   try {
-    calEvents = await fetchCalendarViaClaude(now);
+    calEvents = await fetchCalendar(now);
   } catch (err) {
     console.error("calendar fetch failed:", (err as Error).message);
   }
