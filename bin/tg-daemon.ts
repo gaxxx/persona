@@ -431,19 +431,23 @@ while (!stopping) {
   }
 
   for (const u of updates) {
-    offset = u.update_id + 1;
+    if (stopping) break;
     const m = u.message;
-    if (!m) continue;
-    // Allowlist: drop messages from chat ids we don't recognize. We still
-    // advance the offset (above) so unauthorized senders can't backlog us.
+
+    // Skip non-message updates, unauthorized chats, and content-less messages.
+    // We still advance the offset for these so unauthorized senders / edited
+    // messages / etc. can't backlog us.
+    if (!m) { offset = u.update_id + 1; await saveOffset(); continue; }
     if (!ALLOWED_CHAT_IDS.has(m.chat.id)) {
       log("rejected: chat_id", m.chat.id, "from", m.from?.username ?? m.from?.first_name ?? "?");
-      continue;
+      offset = u.update_id + 1; await saveOffset(); continue;
     }
     const hasPhoto = !!(m.photo && m.photo.length > 0);
     const hasDoc = !!m.document;
     const hasSticker = !!m.sticker;
-    if (!m.text && !hasPhoto && !hasDoc && !hasSticker) continue;
+    if (!m.text && !hasPhoto && !hasDoc && !hasSticker) {
+      offset = u.update_id + 1; await saveOffset(); continue;
+    }
 
     const att = await downloadAttachment(m);
 
@@ -452,11 +456,16 @@ while (!stopping) {
       // Show typing now; the eventual dispatch will refresh it. The group
       // arrives within ms, fires ~800ms later — well within typing TTL.
       sendTyping(m.chat.id).catch(() => {});
+      // Advance offset on buffer (not on dispatch). Accepts a small loss
+      // window if killed during the 800ms debounce; keeps the loop moving.
+      offset = u.update_id + 1; await saveOffset();
       continue;
     }
 
     await dispatch(m, att ? [att] : []);
+    // Only advance offset AFTER successful dispatch. If killed mid-dispatch
+    // (or before it), the next daemon re-fetches this message from Telegram.
+    offset = u.update_id + 1;
+    await saveOffset();
   }
-
-  if (updates.length > 0) await saveOffset();
 }
