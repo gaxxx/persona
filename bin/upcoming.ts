@@ -19,7 +19,9 @@ import {
   logToConversation,
   defaultChatId,
 } from "./lib/cron-helpers";
-import { getAccessToken } from "./lib/google-auth";
+import { getAccessToken, hasGoogleScope } from "./lib/google-auth";
+
+const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
 
 const ROOT = resolve(import.meta.dir, "..");
 const VAULT = process.env.VAULT_PATH;
@@ -102,6 +104,7 @@ interface GcalApiItem {
 }
 
 async function fetchCalendar(now: Date): Promise<CalEvent[]> {
+  if (!hasGoogleScope(CALENDAR_SCOPE)) return [];
   const token = await getAccessToken();
   const tMin = now.toISOString();
   const tMax = new Date(now.getTime() + WINDOW_MIN * 60 * 1000).toISOString();
@@ -231,7 +234,11 @@ async function main(): Promise<void> {
   }
 
   if (all.length === 0) {
-    console.log("silent");
+    if (!hasGoogleScope(CALENDAR_SCOPE) && !existsSync(TASKS_PATH)) {
+      console.log("silent (no calendar creds, no tasks.md — run bin/gauth-reauth.ts to enable)");
+    } else {
+      console.log("silent");
+    }
     return;
   }
 
