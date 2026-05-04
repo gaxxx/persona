@@ -11,9 +11,19 @@
  *
  * This wrapper does all stateful work deterministically and only invokes the
  * LLM for: (a) classify DROP vs KEEP, (b) one-line Chinese gist per KEEP.
+ *
+ * Final stdout line is the 1-line summary that cron-daemon reads back into
+ * CRON.md's "Last run".
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { resolve, dirname } from "path";
+import {
+  etIsoNow,
+  runClaude,
+  extractJson,
+  tgSend,
+  logToConversation,
+} from "./lib/cron-helpers";
 
 const ROOT = resolve(import.meta.dir, "..");
 const VAULT = process.env.VAULT_PATH;
@@ -23,7 +33,6 @@ if (!VAULT) {
 }
 
 const DEDUP_PATH = resolve(ROOT, "data/gmail-notified.json");
-const CRON_PATH = resolve(VAULT, "persona/CRON.md");
 const CHAT_ID = "7504317155";
 const WINDOW_MIN = 60;
 const PRUNE_DAYS = 7;
@@ -52,74 +61,6 @@ function pruneDedup(state: DedupState): DedupState {
 function saveDedup(state: DedupState): void {
   if (!existsSync(dirname(DEDUP_PATH))) mkdirSync(dirname(DEDUP_PATH), { recursive: true });
   writeFileSync(DEDUP_PATH, JSON.stringify(state, null, 2));
-}
-
-function etIsoNow(): string {
-  // 2026-05-03T14:23-04:00 (system local TZ assumed to be ET — see CRON.md)
-  const d = new Date();
-  const offsetMin = -d.getTimezoneOffset();
-  const sign = offsetMin >= 0 ? "+" : "-";
-  const abs = Math.abs(offsetMin);
-  const hh = String(Math.floor(abs / 60)).padStart(2, "0");
-  const mm = String(abs % 60).padStart(2, "0");
-  const local = new Date(d.getTime() + offsetMin * 60000)
-    .toISOString()
-    .slice(0, 16);
-  return `${local}${sign}${hh}:${mm}`;
-}
-
-function etDateAndHm(): { date: string; hm: string } {
-  const iso = etIsoNow();
-  return { date: iso.slice(0, 10), hm: iso.slice(11, 16) };
-}
-
-async function runClaude(prompt: string, timeoutMs = 5 * 60 * 1000): Promise<string> {
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) continue;
-    if (typeof v === "string") env[k] = v;
-  }
-  const proc = Bun.spawn(
-    ["claude", "-p", prompt, "--permission-mode", "bypassPermissions"],
-    {
-      cwd: ROOT,
-      env,
-      stdout: "pipe",
-      stderr: "pipe",
-      stdin: "ignore",
-    },
-  );
-  const timeout = setTimeout(() => proc.kill(), timeoutMs);
-  const exitCode = await proc.exited;
-  clearTimeout(timeout);
-  const stdout = await new Response(proc.stdout).text();
-  if (exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text();
-    throw new Error(`claude exit=${exitCode} stderr=${stderr.slice(-400)}`);
-  }
-  return stdout.trim();
-}
-
-function extractJson<T>(text: string): T {
-  // Match the outermost { ... } block. Greedy match handles nested arrays/objects.
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end < 0 || end <= start) {
-    throw new Error(`No JSON object in output:\n${text.slice(0, 400)}`);
-  }
-  return JSON.parse(text.slice(start, end + 1)) as T;
-}
-
-function updateCronLastRun(taskId: string, suffix: string): void {
-  if (!existsSync(CRON_PATH)) return;
-  const content = readFileSync(CRON_PATH, "utf8");
-  // Match "## <taskId>" then the FIRST "- **Last run:** <stuff till EOL>" within that section.
-  const re = new RegExp(
-    `(## ${taskId}[\\s\\S]*?- \\*\\*Last run:\\*\\*)[^\\n]*`,
-  );
-  if (!re.test(content)) return;
-  const next = content.replace(re, `$1 ${etIsoNow()} ${suffix}`);
-  writeFileSync(CRON_PATH, next);
 }
 
 interface KeepItem {
@@ -162,25 +103,15 @@ async function markRead(ids: string[]): Promise<void> {
 }
 
 async function sendDigest(keep: KeepItem[]): Promise<boolean> {
-  const lines = keep.map(
-    (k) => `• ${k.from} — ${k.subject} — ${k.gist}`,
-  );
+  const lines = keep.map((k) => `• ${k.from} — ${k.subject} — ${k.gist}`);
   const digest = `📬 邮件摘要 (${keep.length} 封):\n\n${lines.join("\n")}`;
-  const proc = Bun.spawn(
-    ["bun", "run", resolve(ROOT, "bin/tg-send.ts"), CHAT_ID, digest],
-    { cwd: ROOT, stdout: "pipe", stderr: "pipe", stdin: "ignore" },
-  );
-  const exitCode = await proc.exited;
-  if (exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text();
-    console.error("tg-send failed:", stderr);
+  try {
+    await tgSend(CHAT_ID, digest);
+  } catch (err) {
+    console.error("tg-send failed:", (err as Error).message);
     return false;
   }
-  // Log to today's conversation
-  const { date, hm } = etDateAndHm();
-  const logPath = resolve(ROOT, `data/conversations/${date}.md`);
-  if (!existsSync(dirname(logPath))) mkdirSync(dirname(logPath), { recursive: true });
-  appendFileSync(logPath, `\n[${hm}] bot: ${digest.replace(/\n/g, " ")}\n`);
+  logToConversation(digest);
   return true;
 }
 
@@ -215,19 +146,8 @@ async function main(): Promise<void> {
     }
   }
 
-  updateCronLastRun(
-    "gmail-unread-digest",
-    `— ${sent} new, ${dropIds.length} auto-read`,
-  );
-
-  console.log(
-    JSON.stringify({
-      ok: true,
-      sent,
-      dropped: dropIds.length,
-      dedup_filtered: keepRaw.length - keepFiltered.length,
-    }),
-  );
+  // Final stdout line — cron-daemon reads this into CRON.md "Last run".
+  console.log(`${sent} new, ${dropIds.length} auto-read`);
 }
 
 main().catch((err) => {

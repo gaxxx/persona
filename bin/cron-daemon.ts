@@ -12,8 +12,9 @@
  *
  * Run: bun run bin/cron-daemon.ts
  */
-import { existsSync, mkdirSync, readFileSync, watch, appendFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, watch, appendFileSync } from "fs";
 import { resolve, dirname } from "path";
+import { etIsoNow } from "./lib/cron-helpers";
 
 const ROOT = resolve(import.meta.dir, "..");
 const VAULT = process.env.VAULT_PATH;
@@ -151,6 +152,27 @@ function scheduleNext(s: Scheduled) {
 
 const RUN_LOG_DIR = resolve(ROOT, "data/cron-runs");
 
+// Update "## <taskId>" section's "- **Last run:**" line in CRON.md.
+// Suffix is appended after the timestamp ("— ..."). Empty suffix → just the timestamp.
+function updateCronLastRun(taskId: string, suffix: string): void {
+  if (!existsSync(CRON_FILE)) return;
+  let content: string;
+  try {
+    content = readFileSync(CRON_FILE, "utf8");
+  } catch {
+    return;
+  }
+  const re = new RegExp(`(## ${taskId}[\\s\\S]*?- \\*\\*Last run:\\*\\*)[^\\n]*`);
+  if (!re.test(content)) return;
+  const tail = suffix ? ` ${etIsoNow()} — ${suffix}` : ` ${etIsoNow()}`;
+  const next = content.replace(re, `$1${tail}`);
+  try {
+    writeFileSync(CRON_FILE, next);
+  } catch (err) {
+    log(`failed to update Last run for ${taskId}: ${(err as Error).message}`);
+  }
+}
+
 async function fireTask(s: Scheduled) {
   s.timer = undefined;
   if (s.running) {
@@ -195,10 +217,18 @@ async function fireTask(s: Scheduled) {
     const elapsed = ((Date.now() - start) / 1000).toFixed(1);
     // Tail of stdout (last ~400 chars) into cron.log for quick scanning.
     let tail = "";
+    let lastLine = "";
     try {
       const text = await Bun.file(stdoutPath).text();
       tail = text.trim().slice(-400);
+      const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+      lastLine = lines[lines.length - 1] ?? "";
     } catch {}
+    if (exitCode === 0) {
+      // Stamp Last run so any future session can see when this task last fired.
+      // Take the script's final stdout line as a 1-line summary.
+      updateCronLastRun(s.task.id, lastLine.slice(0, 200));
+    }
     log(
       `done ${s.task.id} exit=${exitCode} in ${elapsed}s` +
         ` -- log:${stdoutPath}` +

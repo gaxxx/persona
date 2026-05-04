@@ -1,0 +1,84 @@
+/**
+ * cron-helpers.ts — shared utilities for deterministic cron task wrappers.
+ *
+ * Pattern: each cron task lives at bin/<task>.ts. The script does the
+ * stateful/deterministic parts itself (file I/O, dedup, tg-send) and only
+ * shells out to `claude -p` for the LLM-only parts (classify, summarize,
+ * compose). The cron-daemon owns Last-run updates by reading the script's
+ * final stdout line.
+ */
+import { existsSync, mkdirSync, appendFileSync } from "fs";
+import { resolve, dirname } from "path";
+import { sendMessage } from "./telegram";
+
+const ROOT = resolve(import.meta.dir, "../..");
+
+export function etIsoNow(): string {
+  // 2026-05-04T00:55-04:00 (system local TZ assumed to be ET — see CRON.md)
+  const d = new Date();
+  const offsetMin = -d.getTimezoneOffset();
+  const sign = offsetMin >= 0 ? "+" : "-";
+  const abs = Math.abs(offsetMin);
+  const hh = String(Math.floor(abs / 60)).padStart(2, "0");
+  const mm = String(abs % 60).padStart(2, "0");
+  const local = new Date(d.getTime() + offsetMin * 60000)
+    .toISOString()
+    .slice(0, 16);
+  return `${local}${sign}${hh}:${mm}`;
+}
+
+export function etDateAndHm(): { date: string; hm: string } {
+  const iso = etIsoNow();
+  return { date: iso.slice(0, 10), hm: iso.slice(11, 16) };
+}
+
+export async function runClaude(
+  prompt: string,
+  timeoutMs = 5 * 60 * 1000,
+): Promise<string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) continue;
+    if (typeof v === "string") env[k] = v;
+  }
+  const proc = Bun.spawn(
+    ["claude", "-p", prompt, "--permission-mode", "bypassPermissions"],
+    {
+      cwd: ROOT,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+      stdin: "ignore",
+    },
+  );
+  const timeout = setTimeout(() => proc.kill(), timeoutMs);
+  const exitCode = await proc.exited;
+  clearTimeout(timeout);
+  const stdout = await new Response(proc.stdout).text();
+  if (exitCode !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(`claude exit=${exitCode} stderr=${stderr.slice(-400)}`);
+  }
+  return stdout.trim();
+}
+
+export function extractJson<T>(text: string): T {
+  // Match the outermost { ... } block.
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end < 0 || end <= start) {
+    throw new Error(`No JSON object in output:\n${text.slice(0, 400)}`);
+  }
+  return JSON.parse(text.slice(start, end + 1)) as T;
+}
+
+export async function tgSend(chatId: number | string, message: string): Promise<void> {
+  await sendMessage(Number(chatId), message);
+}
+
+export function logToConversation(message: string): void {
+  const { date, hm } = etDateAndHm();
+  const path = resolve(ROOT, `data/conversations/${date}.md`);
+  if (!existsSync(dirname(path))) mkdirSync(dirname(path), { recursive: true });
+  appendFileSync(path, `\n[${hm}] bot: ${message.replace(/\n/g, " ")}\n`);
+}
