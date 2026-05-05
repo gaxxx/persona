@@ -16,12 +16,12 @@ Obsidian
 # bin/cron-daemon.ts reads $VAULT_PATH/persona/CRON.md, no repo-root copy.
 CLAUDE.md
 
-# Personal skill content lives in <vault>/persona/.claude/skills/ and is
-# symlinked into .claude/skills/ per-skill by bin/link-skills.sh. None of
-# those symlinks belong in git. /setup is provided as a slash command at
-# .claude/commands/setup.md (tracked) so it works on a fresh clone before
-# any skill symlinks exist.
-.claude/skills/
+# Skills: most are personal/vault-backed and stay out of git. Track only
+# the shared ones that should ship with the repo.
+.claude/skills/*
+!.claude/skills/assistant-loop/
+!.claude/skills/assistant-test/
+!.claude/skills/kb/
 
 # Editor swap files
 *.swp
