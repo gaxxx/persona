@@ -79,6 +79,8 @@ Conversation log loading discipline (overrides the skill's "always load" step):
 Do NOT start a Monitor or any watcher - the daemon owns Telegram polling.
 Do NOT call tg-pull.ts.
 
+CRITICAL: Every reply to the user MUST be sent via \`bun run bin/tg-send.ts <chat_id> "<msg>"\`. Never return the answer as result text without calling tg-send first — the result field is not visible to the user.
+
 Acknowledge with the single word READY.`;
 
 interface ClaudeProc {
