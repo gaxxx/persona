@@ -212,6 +212,10 @@ async function fireTask(s: Scheduled) {
     for (const k of Object.keys(childEnv)) {
       if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) delete childEnv[k];
     }
+    // Cron-spawned subprocesses are deterministic, single-shot tasks driven
+    // by their Prompt: body — they don't benefit from cross-session auto
+    // memory and pay ~250 cache_creation tokens per fire to load it. Skip.
+    childEnv.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
     const cmd = s.task.kind === "shell"
       ? ["sh", "-c", s.task.body]
       : ["claude", "-p", s.task.body, "--permission-mode", "bypassPermissions"];
