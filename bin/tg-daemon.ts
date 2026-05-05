@@ -15,6 +15,7 @@
  * Run:  bun run bin/tg-daemon.ts
  */
 import { getUpdates, downloadFile, sendTyping, sendMessage, type TelegramMessage } from "./lib/telegram";
+import { registerSession } from "./lib/session-registry";
 import { mkdirSync, existsSync, appendFileSync, statSync, readFileSync } from "fs";
 import type { Subprocess } from "bun";
 
@@ -165,12 +166,20 @@ function spawnClaude(): ClaudeProc {
           type?: string;
           subtype?: string;
           result?: unknown;
+          session_id?: string;
           usage?: { cache_read_input_tokens?: number };
         };
         try {
           ev = JSON.parse(line);
         } catch {
           continue;
+        }
+        if (ev.type === "system" && ev.subtype === "init" && ev.session_id) {
+          try {
+            registerSession(ev.session_id, "tg");
+          } catch (e) {
+            log("registerSession failed:", (e as Error).message);
+          }
         }
         if (ev.type === "assistant" && onFirstResponse) {
           const cb = onFirstResponse;
