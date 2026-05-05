@@ -17,7 +17,8 @@ Three independent processes talk to a shared filesystem and persona config:
 
 - `bin/tg-daemon.ts` - long-running Telegram I/O. Owns a persistent `claude -p --input-format stream-json` subprocess that handles every message in the same session.
 - `bin/cron-daemon.ts` - reads `CRON.md`, schedules each task by its cron expression, spawns a one-shot `claude -p` on fire. Auto-reloads on file change.
-- The interactive REPL you `claude` into - heartbeat checks on the two daemons and ad-hoc work.
+- `bin/watchdog.sh` - bash supervisor (no LLM). Polls every 60s, respawns either daemon if dead, and Telegram-alerts on respawn. Spawned by `/assistant-loop` and disowned, so it survives REPL exit.
+- The interactive REPL you `claude` into - ad-hoc work and on-demand status checks via `/assistant-loop`.
 
 Skills:
 - `/setup` is a tracked slash command at `.claude/commands/setup.md`, so it works the moment you `git clone` - no bootstrap step needed. Nothing else lives under `.claude/` in the repo.
@@ -40,7 +41,7 @@ docker compose up -d --build                          # build + run; auto-starts
 docker compose exec persona tmux attach -t loop       # attach to the live loop (Ctrl-B D to detach)
 ```
 
-The container's `CMD` runs `claude --dangerously-skip-permissions /assistant-loop` inside a tmux session named `loop`, which boots tg-daemon + cron-daemon and self-schedules a heartbeat. Auth carries over from the host's `~/.claude` (mount); if you've never logged in, run `claude /login` on the host once first.
+The container's `CMD` runs `claude --dangerously-skip-permissions /assistant-loop` inside a tmux session named `loop`, which boots tg-daemon + cron-daemon and spawns the bash watchdog to keep them alive. Auth carries over from the host's `~/.claude` (mount); if you've never logged in, run `claude /login` on the host once first.
 
 Common ops:
 

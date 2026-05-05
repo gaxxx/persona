@@ -8,7 +8,8 @@ Three independent processes talk to a shared filesystem + persona:
 
 - **tg-daemon** (`bin/tg-daemon.ts`) - long-running Telegram I/O via an inner `claude -p --input-format stream-json` subprocess.
 - **cron-daemon** (`bin/cron-daemon.ts`) - reads `CRON.md`, schedules each task by its cron expression, and on fire spawns a one-shot `claude -p` to handle the prompt. Auto-reloads `CRON.md` on change.
-- **Main REPL** - the interactive Claude Code session you `claude` into; runs heartbeat checks on the two daemons and handles ad-hoc work.
+- **Watchdog** (`bin/watchdog.sh`) - bash supervisor that polls every 60s and respawns either daemon if it dies. Spawned by `/assistant-loop` and disowned.
+- **Main REPL** - the interactive Claude Code session you `claude` into; handles ad-hoc work. Runs `/assistant-loop` once on entry to (re)spawn the watchdog if needed and check daemon status; no background heartbeat.
 
 Skills are split into two layers:
 - **Generic** (this repo): `assistant-loop`, `assistant-test`, `kb` interface stub.
