@@ -59,6 +59,8 @@ If \`attachment\` is set, the user attached a single file. \`kind\` is "photo" /
 
 If \`attachments\` (plural array) is set instead, the user sent multiple files at once as a Telegram media group (e.g. 2-10 photos in a single send). Each entry has the same shape as \`attachment\`. Read all of them with the Read tool and treat them as one user turn — the caption (if any) is in \`text\` and applies to the whole group.
 
+When you reply to a photo/document, include enough description in your reply that a future session reading the conversation log can understand what the file was about WITHOUT having to re-Read it. e.g. don't just say "好看!" — say "好看! 这盘麻婆豆腐看起来很正宗". The actual image/PDF bytes are NOT in the conversation log (only your text reply is), so your reply is the future-you's only handle to that attachment unless they re-Read it from \`data/attachments/<message_id>.*\`.
+
 If \`reply_to\` is set, the user is replying to an earlier message. Use it as context for what they're responding to. If \`reply_to.from_bot\` is true, that prior message was from you - find it in data/conversations/YYYY-MM-DD.md to recover full context. If the replied-to had an attachment that was previously processed by this daemon, the file is at data/attachments/<reply_to.message_id>.* - Read it if relevant.
 
 Read CLAUDE.md (in cwd) for behaviour. Use the assistant-loop skill mechanics:
@@ -84,14 +86,21 @@ interface ClaudeProc {
   shutdown: () => Promise<void>;
   isDead: () => boolean;
   getTurns: () => number;
+  getLastCacheRead: () => number;
   spawnedAt: number;
 }
 
 // Rotate the inner claude before context grows unbounded — context is held in
 // RAM as KV cache, and macOS will SIGKILL it under memory pressure (we got
 // burned at 2.7M cached tokens). Whichever fires first.
-const MAX_TURNS = 50;
+const MAX_TURNS = 25;
 const MAX_AGE_MS = 4 * 60 * 60 * 1000;
+// Cost-driven backstop: if accumulated context (cache_read) exceeds this AND
+// we've completed a few turns, rotate. The 5-turn floor avoids same-turn
+// loops on photo/PDF Reads (a single 200K image would otherwise trigger
+// rotation on the very turn that needed it).
+const MAX_CACHE_READ = 500_000;
+const MIN_TURNS_FOR_CACHE_ROTATION = 5;
 // Two-phase timeout: thinking (no output yet) gets a tight cap to catch hung
 // loops fast; once claude starts producing output we extend to a generous
 // total so long but actively-streaming turns don't get murdered.
@@ -132,6 +141,9 @@ function spawnClaude(): ClaudeProc {
   // Fired once per turn the first time claude emits any assistant event
   // (text or tool_use). Used to swap thinking -> typing timeout.
   let onFirstResponse: (() => void) | null = null;
+  // Most recent turn's accumulated context size (cache_read_input_tokens).
+  // Used by rotateIfNeeded() as a cost-driven backstop alongside MAX_TURNS/MAX_AGE.
+  let lastCacheRead = 0;
   const enc = new TextEncoder();
 
   // Read stdout NDJSON forever, signal turn completion.
@@ -149,7 +161,12 @@ function spawnClaude(): ClaudeProc {
         buf = buf.slice(idx + 1);
         if (!line.trim()) continue;
         log("claude:", line);
-        let ev: { type?: string; subtype?: string; result?: unknown };
+        let ev: {
+          type?: string;
+          subtype?: string;
+          result?: unknown;
+          usage?: { cache_read_input_tokens?: number };
+        };
         try {
           ev = JSON.parse(line);
         } catch {
@@ -161,6 +178,9 @@ function spawnClaude(): ClaudeProc {
           cb();
         }
         if (ev.type === "result") {
+          if (typeof ev.usage?.cache_read_input_tokens === "number") {
+            lastCacheRead = ev.usage.cache_read_input_tokens;
+          }
           const r = pendingResolve;
           pendingResolve = null;
           if (r) r();
@@ -239,6 +259,7 @@ function spawnClaude(): ClaudeProc {
     shutdown,
     isDead: () => dead,
     getTurns: () => turns,
+    getLastCacheRead: () => lastCacheRead,
     spawnedAt: Date.now(),
   };
 }
@@ -291,8 +312,13 @@ async function rotateIfNeeded() {
   }
   const tooOld = Date.now() - claude.spawnedAt > MAX_AGE_MS;
   const tooMany = claude.getTurns() >= MAX_TURNS;
-  if (tooOld || tooMany) {
-    log(`rotating claude: turns=${claude.getTurns()} ageMs=${Date.now() - claude.spawnedAt}`);
+  const tooBig =
+    claude.getTurns() >= MIN_TURNS_FOR_CACHE_ROTATION &&
+    claude.getLastCacheRead() > MAX_CACHE_READ;
+  if (tooOld || tooMany || tooBig) {
+    log(
+      `rotating claude: turns=${claude.getTurns()} ageMs=${Date.now() - claude.spawnedAt} cacheRead=${claude.getLastCacheRead()}`,
+    );
     const old = claude;
     claude = spawnClaude();
     attachExitHandler(claude);
@@ -384,8 +410,47 @@ async function downloadAttachment(m: TelegramMessage): Promise<PendingAttachment
   return undefined;
 }
 
+// Short-circuit handler for `/stats` — runs daemon-stats.ts and replies
+// directly, bypassing the inner claude (saves an LLM turn).
+async function handleStatsCommand(chatId: number): Promise<void> {
+  const proc = Bun.spawn(["bun", "run", "bin/daemon-stats.ts"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const out = await new Response(proc.stdout).text();
+  await proc.exited;
+  const body = out.trim() || "(no output)";
+  // Wrap in triple-backticks so the markdown→HTML converter in lib/telegram
+  // renders this as a <pre><code> block (monospaced, lines preserved).
+  await sendMessage(chatId, "```\n" + body + "\n```");
+  // Log both halves so the conversation file stays consistent.
+  const { date, hm } = (() => {
+    const d = new Date();
+    return {
+      date: d.toISOString().slice(0, 10),
+      hm: d.toTimeString().slice(0, 5),
+    };
+  })();
+  const logPath = `data/conversations/${date}.md`;
+  if (!existsSync("data/conversations")) mkdirSync("data/conversations", { recursive: true });
+  appendFileSync(
+    logPath,
+    `\n[${hm}] user: /stats\n[${hm}] bot: ${body.replace(/\n/g, " | ")}\n`,
+  );
+  // Reset baseline so the inner claude doesn't see our writes as "external"
+  // on its next turn.
+  noteLogConsumed();
+}
+
 async function dispatch(m: TelegramMessage, attachments: PendingAttachment[]): Promise<void> {
   await rotateIfNeeded();
+  // Short-circuit `/stats` (and only `/stats` — no args, no attachments) to
+  // avoid burning an inner-claude turn on a deterministic readout.
+  if ((m.text ?? "").trim() === "/stats" && attachments.length === 0) {
+    log("dispatch: /stats short-circuit");
+    await handleStatsCommand(m.chat.id);
+    return;
+  }
   let replyTo;
   if (m.reply_to_message) {
     const r = m.reply_to_message;
