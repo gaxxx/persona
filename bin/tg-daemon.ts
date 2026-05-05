@@ -15,11 +15,16 @@
  * Run:  bun run bin/tg-daemon.ts
  */
 import { getUpdates, downloadFile, sendTyping, sendMessage, type TelegramMessage } from "./lib/telegram";
-import { mkdirSync, existsSync, appendFileSync, statSync, readFileSync } from "fs";
+import { mkdirSync, existsSync, appendFileSync, statSync, readFileSync, writeFileSync } from "fs";
 import type { Subprocess } from "bun";
 
 const OFFSET_FILE = "data/tg-offset.json";
 const LOG_FILE = "data/daemon.log";
+// Touched at the top of every poll iteration. idle-tick.ts reads its mtime
+// to detect "alive but stuck" — getUpdates hangs past the AbortController
+// timeout (ep_poll on a socket that never closes) leave the process running
+// in pgrep but unable to drain the Telegram queue. Stale mtime → force-kill.
+const HEARTBEAT_FILE = "data/tg-daemon-heartbeat";
 const LONG_POLL_TIMEOUT = 25;
 // Cap external-writes payload to keep event JSON sane. If an unusually huge
 // cron output appears between turns, the payload gets truncated and claude
@@ -46,6 +51,10 @@ function log(...parts: unknown[]) {
   const line = `[${new Date().toISOString()}] ${parts.map((p) => (typeof p === "string" ? p : JSON.stringify(p))).join(" ")}\n`;
   appendFileSync(LOG_FILE, line);
   process.stdout.write(line);
+}
+
+function touchHeartbeat() {
+  try { writeFileSync(HEARTBEAT_FILE, new Date().toISOString()); } catch {}
 }
 
 // ---- Claude subprocess ----------------------------------------------------
@@ -555,6 +564,7 @@ process.on("SIGINT", () => stop("SIGINT"));
 process.on("SIGTERM", () => stop("SIGTERM"));
 
 while (!stopping) {
+  touchHeartbeat();
   let updates;
   try {
     updates = await getUpdates(offset, LONG_POLL_TIMEOUT);

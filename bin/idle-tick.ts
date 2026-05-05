@@ -21,6 +21,11 @@ const CHAT_ID = defaultChatId();
 const TG_LOG = "/tmp/tg-daemon-stderr.log";
 const CRON_LOG = "/tmp/cron-daemon-stderr.log";
 const STATE_FILE = resolve(ROOT, "data/idle-tick-state.json");
+const TG_HEARTBEAT_FILE = resolve(ROOT, "data/tg-daemon-heartbeat");
+
+// tg-daemon writes HEARTBEAT_FILE every poll iteration (~0-25s under load).
+// 90s gives generous margin while still catching real hangs quickly.
+const HEARTBEAT_STALE_MS = 90 * 1000;
 
 // Escalation policy: after this many consecutive restart failures for the same
 // daemon, fire one diagnostic `claude -p`. Then wait cooldown before next.
@@ -47,6 +52,31 @@ function loadState(): State {
 function saveState(s: State): void {
   if (!existsSync(dirname(STATE_FILE))) mkdirSync(dirname(STATE_FILE), { recursive: true });
   writeFileSync(STATE_FILE, JSON.stringify(s, null, 2));
+}
+
+function isTgHeartbeatStale(): boolean {
+  // Missing file = newly-started daemon hasn't written its first heartbeat yet
+  // (or running an older pre-heartbeat build). Treat as fresh; never false-
+  // positive a kill on missing file.
+  if (!existsSync(TG_HEARTBEAT_FILE)) return false;
+  try {
+    return Date.now() - statSync(TG_HEARTBEAT_FILE).mtimeMs > HEARTBEAT_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+
+async function killStuckTgDaemon(): Promise<void> {
+  // SIGKILL the wrapper bun proc and its inner claude child. The daemon was
+  // unresponsive to the JS event loop, so SIGTERM may also be ignored.
+  await new Promise<void>((res) => {
+    const p = Bun.spawn(
+      ["sh", "-c", `pkill -9 -f 'bun run bin/tg-daemon\\.ts'; pkill -9 -f 'claude -p --input-format stream-json' || true`],
+      { stdout: "ignore", stderr: "ignore" },
+    );
+    p.exited.then(() => res());
+  });
+  await new Promise((r) => setTimeout(r, 500));
 }
 
 async function isAlive(name: "tg-daemon" | "cron-daemon"): Promise<boolean> {
@@ -179,7 +209,18 @@ async function main(): Promise<void> {
   const state = loadState();
 
   for (const d of DAEMONS) {
-    if (await isAlive(d.name)) {
+    let alive = await isAlive(d.name);
+    // tg-daemon writes a heartbeat file every poll iteration. If the process
+    // is alive but the heartbeat is stale, the poll loop is stuck (e.g. a
+    // getUpdates fetch hung past its AbortController). Force-kill so the
+    // restart path runs — pgrep alone can't catch this failure mode.
+    if (alive && d.name === "tg-daemon" && isTgHeartbeatStale()) {
+      events.push("🦌 tg-daemon stuck (heartbeat stale), force-restarting");
+      try { await tgSend(CHAT_ID, "🦌 tg-daemon stuck (heartbeat stale), force-restarting"); } catch {}
+      await killStuckTgDaemon();
+      alive = false;
+    }
+    if (alive) {
       // Healthy: reset failure counter for this daemon.
       if (state[d.name].consecutive_failures > 0) {
         state[d.name].consecutive_failures = 0;
