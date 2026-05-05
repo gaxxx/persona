@@ -21,6 +21,7 @@ Run a quick audit before asking anything. For each item, note done / missing / p
 - `<vault>/persona/` exists.
 - `<vault>/persona/.claude/skills/kb-impl/` exists (any directory or symlink).
 - `.claude/skills` in the repo is a symlink to `<vault>/persona/.claude/skills/`.
+- `bin/watchdog.sh` exists and is executable (`-x`). This is the daemon supervisor — without it, `/assistant-loop` can't keep daemons alive when the REPL is closed.
 
 Tell the user what you found in 4-5 lines, then offer to fill the gaps.
 
@@ -99,7 +100,20 @@ For each entry in `credentials/` (e.g. `.gmail-mcp/`), symlink it into `$HOME` s
 
 If `credentials/` doesn't exist yet, the script no-ops. Skip this step if the user has no third-party credentials to wire.
 
-### 7. Final check + next step
+### 7. Watchdog smoke test
+
+Verify `bin/watchdog.sh` works before declaring setup done:
+
+```bash
+[ -x bin/watchdog.sh ] || { chmod +x bin/watchdog.sh; }
+bash bin/watchdog.sh --once
+```
+
+The `--once` flag runs a single supervision cycle and exits. Expected behavior on a fresh setup (no daemons yet running): two `[...] watchdog: ... was down, restarting` log lines, plus two Telegram messages to the configured chat. After ~5s, `pgrep -f tg-daemon.ts` and `pgrep -f cron-daemon.ts` should both return PIDs.
+
+If it fails (script not found, exits non-zero, no daemons started), STOP and surface the error to the user — `/assistant-loop` won't work without it.
+
+### 8. Final check + next step
 
 Re-run the audit from step 1. Everything should be green. Then tell them:
 
@@ -115,6 +129,8 @@ first message - just say hi.
 ```
 
 If they're already inside the running container, skip the docker lines and just tell them to run `/assistant-loop`.
+
+The bash watchdog (`bin/watchdog.sh`) survives REPL exit (spawned with `& disown`), so they can close the REPL after kicking off `/assistant-loop` once. Daemons stay supervised at $0 ongoing token cost. In Docker, the watchdog `pkill`s claude on daemon death so the container's `restart: unless-stopped` policy gives a fresh start of everything.
 
 ## Re-runs
 

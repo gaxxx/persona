@@ -1,17 +1,20 @@
 ---
 name: assistant-loop
-description: Personal assistant loop. Three independent contexts - Telegram I/O (tg-daemon), scheduled tasks (cron-daemon), and main REPL (interactive + heartbeat). Consults CLAUDE.md for what to do; this skill handles how.
+description: Personal assistant loop. Telegram I/O (tg-daemon), scheduled tasks (cron-daemon), and an interactive REPL — supervised by a background bash watchdog so the REPL doesn't need to stay open burning tokens. Consults CLAUDE.md for what to do; this skill handles how.
 ---
 
 # Assistant Loop
 
-The assistant runs in **three parallel contexts** that share the same filesystem and persona but talk to different audiences. They are independent processes - none is blocked by the others.
+The assistant has **three long-running components** plus an optional REPL:
 
-| Context | Scope | Started by |
+| Component | Scope | Started by |
 |---|---|---|
-| **tg-daemon** (`bin/tg-daemon.ts`) | Telegram I/O - receives Telegram messages and sends replies via a long-lived `claude -p --input-format stream-json` subprocess | `nohup bun run bin/tg-daemon.ts &` |
-| **cron-daemon** (`bin/cron-daemon.ts`) | Scheduled tasks from `CRON.md` (gmail digest, daily journal, morning brief). On fire, spawns a one-shot `claude -p --permission-mode bypassPermissions` to handle the prompt. Auto-reloads on `CRON.md` change. | `nohup bun run bin/cron-daemon.ts &` |
-| **Main REPL** (this Claude Code session) | Interactive session for ad-hoc work + daemon health heartbeat | User runs `/loop /assistant-loop` |
+| **tg-daemon** (`bin/tg-daemon.ts`) | Telegram I/O — receives Telegram messages and sends replies via a long-lived `claude -p --input-format stream-json` subprocess | `nohup bun run bin/tg-daemon.ts &` (or watchdog respawn) |
+| **cron-daemon** (`bin/cron-daemon.ts`) | Scheduled tasks from `CRON.md` (gmail digest, daily journal, morning brief). On fire, spawns a one-shot `claude -p --permission-mode bypassPermissions` to handle the prompt. Auto-reloads on `CRON.md` change. | `nohup bun run bin/cron-daemon.ts &` (or watchdog respawn) |
+| **watchdog** (`bin/watchdog.sh`) | Bash supervisor (no LLM). Loops every 60s; respawns dead daemon(s) + Telegram alert + (in Docker) `pkill claude` so the container restart policy can clean-slate. | `/assistant-loop` first tick spawns it `& disown` if not already alive. |
+| **Main REPL** (this Claude Code session) | Interactive session for ad-hoc work. NO heartbeat — the watchdog handles supervision. | User runs `/assistant-loop` (one-shot) when they want a status check. |
+
+**Cost note:** The REPL no longer schedules wake-ups. Open it when you want to interact, close it when you're done — daemons stay supervised by the watchdog regardless.
 
 ## Channel Discipline (information isolation)
 
@@ -20,7 +23,7 @@ The assistant runs in **three parallel contexts** that share the same filesystem
 - **Telegram message arrives** -> daemon's claude subprocess replies on Telegram (`bun run bin/tg-send.ts <chat_id> "<msg>"`). Don't echo anything to the REPL.
 - **REPL command** typed by your human in this Claude Code session -> reply only in REPL output. Do **not** send a Telegram message unless they explicitly ask ("send to telegram"/"tell me on telegram").
 - **Cron-fired tasks** (gmail digest, daily journal, morning brief) - push results to Telegram per their CRON.md prompt. REPL gets only a brief status line.
-- **Heartbeat ticks** - normally silent (just check daemon health + reschedule). **Send Telegram alert** when there's a real issue worth interrupting the user: daemon was dead and got restarted, daemon failed to restart, daemon hasn't processed any message in >1h despite Telegram updates being available, etc. Don't alert for routine ticks.
+- **Watchdog respawns** — the bash watchdog sends Telegram alerts directly when it restarts a daemon (`🦌 tg-daemon was down, restarting`). REPL doesn't see this; the user gets the message on their phone.
 
 When in doubt, prefer one channel - the one that originated the request.
 
@@ -52,32 +55,22 @@ Steps when handling an event:
 
 The daemon **only** owns Telegram. It does NOT start a Monitor, does NOT call `bin/tg-pull.ts`, and does NOT register crons.
 
-## Main REPL - First Tick
+## Main REPL — `/assistant-loop` (one-shot)
 
-1. **Verify both daemons are running** - `pgrep -af tg-daemon.ts` and `pgrep -af cron-daemon.ts`. If either is down, start it:
+This skill runs once per invocation. No `ScheduleWakeup`, no heartbeat.
+
+1. **Verify the watchdog is alive** — `pgrep -f bin/watchdog.sh`. If not running, spawn it (it'll come up and immediately catch any dead daemons):
    ```bash
-   nohup bun run bin/tg-daemon.ts   > /tmp/tg-daemon-stderr.log   2>&1 & disown
-   nohup bun run bin/cron-daemon.ts > /tmp/cron-daemon-stderr.log 2>&1 & disown
+   nohup bash bin/watchdog.sh > /tmp/watchdog.log 2>&1 & disown
    ```
-   Wait ~6s. Confirm tg-daemon via `grep "priming complete" /tmp/tg-daemon-stderr.log`. Confirm cron-daemon via `grep "loaded . task" /tmp/cron-daemon-stderr.log`.
 
-2. **Re-arm pending reminders** - read `<vault>/persona/tasks.md` for incomplete tasks with future dates. Add them as cron entries in `CRON.md` (cron-daemon picks them up via fs.watch) or send overdue ones immediately via Telegram with a note.
+2. **Quick daemon status** — pgrep tg-daemon and cron-daemon. If either is dead, the watchdog will catch them within 60s; for instant feedback you can run `bash bin/watchdog.sh --once` to do a single check now.
 
-3. Schedule fallback heartbeat via `ScheduleWakeup` (1200s).
+3. **Re-arm pending reminders** — read `<vault>/persona/tasks.md` for incomplete tasks with dates ≤ today. Send overdue ones immediately via Telegram with a note. (Future-dated tasks are handled by the `upcoming-1h-preview` cron task, no need to re-arm.)
 
-The main REPL does **not** poll Telegram (tg-daemon owns that), does **not** schedule cron tasks (cron-daemon owns that), and does **not** handle scheduled-task prompts (those run as headless `claude -p` subprocesses spawned by cron-daemon).
+4. **Report status to the REPL user** in 1–3 lines (e.g., "✓ watchdog up, both daemons healthy, 2 overdue tasks pinged"). Done — no scheduled wake-up.
 
-## Main REPL - On ScheduleWakeup (heartbeat)
-
-Check both daemons.
-
-1. **tg-daemon** (`pgrep -af tg-daemon.ts`):
-   - Alive -> silent.
-   - Dead -> restart (`nohup bun run bin/tg-daemon.ts ...`), wait for `priming complete`. Telegram alert: `🦌 tg-daemon was down, restarted (PID <pid>)`. If restart fails (no priming after ~15s), Telegram: `⚠️ tg-daemon failed to restart, manual intervention` + last 5 lines of `/tmp/tg-daemon-stderr.log`.
-2. **cron-daemon** (`pgrep -af cron-daemon.ts`):
-   - Alive -> silent.
-   - Dead -> restart (`nohup bun run bin/cron-daemon.ts ...`), wait for `loaded . task`. Telegram alert: `⏰ cron-daemon was down, restarted`.
-3. Reschedule heartbeat (1200s).
+The main REPL does **not** poll Telegram (tg-daemon owns that), does **not** schedule cron tasks (cron-daemon owns that), and does **not** supervise daemons in a loop (watchdog owns that).
 
 ## Upcoming Preview (soft reminders)
 
@@ -167,7 +160,7 @@ bun run bin/cron-daemon.ts                     # cron daemon entry point
 
 ## Error Handling
 
-- If a script fails, log the error and continue. Never let an error stop the loop - always reschedule the heartbeat.
 - If tg-daemon's inner claude subprocess dies mid-turn, tg-daemon respawns it and re-sends the priming.
-- If tg-daemon or cron-daemon themselves die, the heartbeat detects via `pgrep` and restarts the missing one(s).
-- If a single cron fire fails (claude subprocess errors out), cron-daemon logs and continues with the schedule - one bad fire doesn't break future fires.
+- If tg-daemon or cron-daemon themselves die, the bash watchdog (`bin/watchdog.sh`) detects via `pgrep` within 60s and respawns the missing one(s) + Telegram alerts the user. In Docker, the watchdog also `pkill`s claude so the container restart policy gives a clean slate.
+- If the watchdog itself dies, the next `/assistant-loop` invocation respawns it. Until then, no supervision — but in Docker the container restart policy still catches container-level failures.
+- If a single cron fire fails (claude subprocess errors out), cron-daemon logs and continues with the schedule — one bad fire doesn't break future fires.

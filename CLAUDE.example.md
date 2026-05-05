@@ -55,4 +55,4 @@ Update these files as you learn new things:
 
 ## Starting the Assistant
 
-To start: `/loop /assistant-loop`
+To start: `/assistant-loop` — one-shot. Spawns `bin/watchdog.sh` (bash supervisor, $0 ongoing cost) if not already running, checks daemons, re-arms overdue reminders, then exits. No background heartbeat; the watchdog handles all supervision and Telegram-alerts on daemon respawns.
