@@ -81,7 +81,7 @@ async function classifyAndSummarize(cutoffUnix: number): Promise<ClassifyResult>
 1. Call mcp__gmail__search_emails with query "is:unread after:${cutoffUnix}" and maxResults 25.
 2. Classify each result into DROP or KEEP using sender + subject (do NOT fetch each email):
    - DROP: marketing/promos (sale/deal/%off/newsletter/weekly digest), automated senders (no-reply@, donotreply@, notifications@, *@public.govdelivery.com), USPS Informed Delivery, job alerts, system notifications.
-   - KEEP: personal/work mail, school teachers/parents, tax/visa/legal, payments needing review, anything from a real person addressed to Siyun.
+   - KEEP: personal/work mail, school teachers/parents, tax/visa/legal, payments needing review, anything from a real person addressed to the user.
 3. For each KEEP, write a single-sentence Chinese gist (<=80 chars). Use the subject + sender to infer; do not fetch the body.
 4. Output ONLY this JSON, no prose, no markdown fences:
 {"drop_ids": ["msgid", ...], "keep": [{"id":"msgid","from":"name","subject":"subj","gist":"中文简介"}]}

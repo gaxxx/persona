@@ -17,9 +17,11 @@ import { resolve } from "path";
 import { registerSession, type SessionRole } from "./lib/session-registry";
 
 const HOME = process.env.HOME ?? "";
+const REPO_ROOT = resolve(import.meta.dir, "..");
 const PROJECTS_DIR = resolve(
   HOME,
-  ".claude-loop/projects/-Users-woosiyun-playground-persona",
+  ".claude-loop/projects",
+  REPO_ROOT.replaceAll("/", "-"),
 );
 
 function findCurrentSessionId(): string | null {

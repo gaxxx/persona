@@ -86,7 +86,7 @@ Journal file (existing or to create): ${journalPath}
 
 Steps (do all, in order):
 
-1. Read the conversation log at ${convPath} (use Read tool). It contains today's Telegram conversations between Siyun and the assistant.
+1. Read the conversation log at ${convPath} (use Read tool). It contains today's Telegram conversations between the user and the assistant.
 2. Check Google Calendar for today's events: call mcp__claude_ai_Google_Calendar__list_events with timeMin="${date}T00:00:00-04:00" and timeMax="${date}T23:59:59-04:00".
 3. Search Gmail with mcp__gmail__search_emails query "after:${cutoffUnix}" and maxResults 25 — note any work/personal mail worth recording (skip promos/automated).
 4. Read the existing journal file at ${journalPath} if it exists. You MUST preserve every existing bullet verbatim — only ADD new items, never remove or rewrite existing ones.
