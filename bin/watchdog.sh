@@ -10,8 +10,6 @@
 # On daemon death:
 #   1. Respawn it; record new PID in the pidfile.
 #   2. Telegram notification to the chat in $TELEGRAM_CHAT_ID (or .env).
-#   3. If running inside Docker (presence of /.dockerenv), pkill claude
-#      so the container's restart policy can give us a clean slate.
 #
 # Lifecycle:
 #   - First REPL open:        /assistant-loop spawns this; it runs forever.
@@ -34,9 +32,6 @@ CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 INTERVAL="${WATCHDOG_INTERVAL:-60}"
 ONCE=0
 [ "${1:-}" = "--once" ] && ONCE=1
-
-IN_DOCKER=0
-[ -f /.dockerenv ] && IN_DOCKER=1
 
 PIDDIR="$REPO_ROOT/data"
 mkdir -p "$PIDDIR"
@@ -101,12 +96,10 @@ check_once() {
   if ! is_alive "$TG_PIDFILE" "bin/tg-daemon.ts"; then
     notify "🦌 tg-daemon was down, restarting"
     start_tg_daemon
-    [ "$IN_DOCKER" = 1 ] && pkill -f '^claude' 2>/dev/null || true
   fi
   if ! is_alive "$CRON_PIDFILE" "bin/cron-daemon.ts"; then
     notify "⏰ cron-daemon was down, restarting"
     start_cron_daemon
-    [ "$IN_DOCKER" = 1 ] && pkill -f '^claude' 2>/dev/null || true
   fi
 }
 
@@ -117,7 +110,7 @@ if [ "$ONCE" = 1 ]; then
   exit 0
 fi
 
-log "starting (interval=${INTERVAL}s, in_docker=${IN_DOCKER})"
+log "starting (interval=${INTERVAL}s)"
 while true; do
   check_once
   sleep "$INTERVAL"

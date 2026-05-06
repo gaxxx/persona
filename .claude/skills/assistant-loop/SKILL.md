@@ -11,7 +11,7 @@ The assistant has **three long-running components** plus an optional REPL:
 |---|---|---|
 | **tg-daemon** (`bin/tg-daemon.ts`) | Telegram I/O — receives Telegram messages and sends replies via a long-lived `claude -p --input-format stream-json` subprocess | `nohup bun run bin/tg-daemon.ts &` (or watchdog respawn) |
 | **cron-daemon** (`bin/cron-daemon.ts`) | Scheduled tasks from `CRON.md` (gmail digest, daily journal, morning brief). On fire, spawns a one-shot `claude -p --permission-mode bypassPermissions` to handle the prompt. Auto-reloads on `CRON.md` change. | `nohup bun run bin/cron-daemon.ts &` (or watchdog respawn) |
-| **watchdog** (`bin/watchdog.sh`) | Bash supervisor (no LLM). Loops every 60s; respawns dead daemon(s) + Telegram alert + (in Docker) `pkill claude` so the container restart policy can clean-slate. | `/assistant-loop` first tick spawns it `& disown` if not already alive. |
+| **watchdog** (`bin/watchdog.sh`) | Bash supervisor (no LLM). Loops every 60s; respawns dead daemon(s) + Telegram alert. | `/assistant-loop` first tick spawns it `& disown` if not already alive. |
 | **Main REPL** (this Claude Code session) | Interactive session for ad-hoc work. NO heartbeat — the watchdog handles supervision. | User runs `/assistant-loop` (one-shot) when they want a status check. |
 
 **Cost note:** The REPL no longer schedules wake-ups. Open it when you want to interact, close it when you're done — daemons stay supervised by the watchdog regardless.
@@ -163,6 +163,6 @@ bun run bin/cron-daemon.ts                     # cron daemon entry point
 ## Error Handling
 
 - If tg-daemon's inner claude subprocess dies mid-turn, tg-daemon respawns it and re-sends the priming.
-- If tg-daemon or cron-daemon themselves die, the bash watchdog (`bin/watchdog.sh`) detects via `pgrep` within 60s and respawns the missing one(s) + Telegram alerts the user. In Docker, the watchdog also `pkill`s claude so the container restart policy gives a clean slate.
-- If the watchdog itself dies, the next `/assistant-loop` invocation respawns it. Until then, no supervision — but in Docker the container restart policy still catches container-level failures.
+- If tg-daemon or cron-daemon themselves die, the bash watchdog (`bin/watchdog.sh`) detects via pidfile + `kill -0` within 60s and respawns the missing one(s) + Telegram alerts the user.
+- If the watchdog itself dies, the next `/assistant-loop` invocation respawns it. Until then, no supervision — in Docker the container restart policy still catches container-level failures.
 - If a single cron fire fails (claude subprocess errors out), cron-daemon logs and continues with the schedule — one bad fire doesn't break future fires.
