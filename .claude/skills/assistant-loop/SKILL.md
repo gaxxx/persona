@@ -160,6 +160,8 @@ bun run bin/cron-daemon.ts                     # cron daemon entry point
 
 `bin/tg-pull.ts` and `bin/tg-watch.ts` are legacy from the pre-daemon architecture. Don't use.
 
+`bin/tg-send.ts` reads the message body from stdin only — pass via `echo ... | tg-send <id>` or `<<'EOF'` heredoc. Passing the body as an argv argument exits with a usage error (bash interpolation of `$`, backticks, `"` would silently corrupt it).
+
 ## Error Handling
 
 - If tg-daemon's inner claude subprocess dies mid-turn, tg-daemon respawns it and re-sends the priming.

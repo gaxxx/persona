@@ -44,7 +44,7 @@ notify() {
   local msg="$1"
   log "$msg"
   if [ -n "$CHAT_ID" ]; then
-    bun run bin/tg-send.ts "$CHAT_ID" "$msg" 2>/dev/null || true
+    printf '%s' "$msg" | bun run bin/tg-send.ts "$CHAT_ID" 2>/dev/null || true
   fi
 }
 
