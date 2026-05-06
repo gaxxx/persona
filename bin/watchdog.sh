@@ -2,8 +2,13 @@
 # bin/watchdog.sh — supervises tg-daemon + cron-daemon. Spawned by
 # /assistant-loop on REPL start (`& disown`) so it survives REPL exit.
 #
+# Liveness is tracked via pidfiles in data/<name>.pid (written when we
+# spawn). Checks use `kill -0 <pid>` plus a /proc/<pid>/cmdline sanity
+# check, so ad-hoc shells whose argv mention the daemon names can't
+# false-positive (the original `pgrep -f` approach hit exactly that bug).
+#
 # On daemon death:
-#   1. Respawn it.
+#   1. Respawn it; record new PID in the pidfile.
 #   2. Telegram notification to the chat in $TELEGRAM_CHAT_ID (or .env).
 #   3. If running inside Docker (presence of /.dockerenv), pkill claude
 #      so the container's restart policy can give us a clean slate.
@@ -33,6 +38,11 @@ ONCE=0
 IN_DOCKER=0
 [ -f /.dockerenv ] && IN_DOCKER=1
 
+PIDDIR="$REPO_ROOT/data"
+mkdir -p "$PIDDIR"
+TG_PIDFILE="$PIDDIR/tg-daemon.pid"
+CRON_PIDFILE="$PIDDIR/cron-daemon.pid"
+
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] watchdog: $*" >&2; }
 
 notify() {
@@ -43,23 +53,57 @@ notify() {
   fi
 }
 
+# Liveness via pidfile. The cmdline check guards against PID reuse:
+# if the daemon died and an unrelated process now holds the same PID,
+# its cmdline won't contain the script path and we'll respawn.
+is_alive() {
+  local pidfile="$1" script="$2" pid
+  [ -f "$pidfile" ] || return 1
+  pid=$(cat "$pidfile" 2>/dev/null)
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  if [ -r "/proc/$pid/cmdline" ]; then
+    tr '\0' ' ' < "/proc/$pid/cmdline" | grep -qF -- "$script" || return 1
+  fi
+  return 0
+}
+
+# First-tick recovery: if a daemon is running but no pidfile exists
+# (e.g., started manually before the watchdog came up), adopt its PID
+# instead of spawning a duplicate. The [b]racket trick keeps the search
+# command itself out of the match set.
+adopt_existing() {
+  local pidfile="$1" script="$2" pid
+  [ -f "$pidfile" ] && return 0
+  pid=$(ps -eo pid=,args= | awk -v s="$script" '$0 ~ ("[b]un run " s) {print $1; exit}')
+  if [ -n "$pid" ]; then
+    echo "$pid" > "$pidfile"
+    log "adopted existing $script (pid=$pid)"
+  fi
+}
+
 start_tg_daemon() {
   nohup bun run bin/tg-daemon.ts > /tmp/tg-daemon-stderr.log 2>&1 &
+  echo $! > "$TG_PIDFILE"
   disown
 }
 
 start_cron_daemon() {
   nohup bun run bin/cron-daemon.ts > /tmp/cron-daemon-stderr.log 2>&1 &
+  echo $! > "$CRON_PIDFILE"
   disown
 }
 
 check_once() {
-  if ! pgrep -f "bun.*tg-daemon\.ts" >/dev/null; then
+  adopt_existing "$TG_PIDFILE" "bin/tg-daemon.ts"
+  adopt_existing "$CRON_PIDFILE" "bin/cron-daemon.ts"
+
+  if ! is_alive "$TG_PIDFILE" "bin/tg-daemon.ts"; then
     notify "🦌 tg-daemon was down, restarting"
     start_tg_daemon
     [ "$IN_DOCKER" = 1 ] && pkill -f '^claude' 2>/dev/null || true
   fi
-  if ! pgrep -f "bun.*cron-daemon\.ts" >/dev/null; then
+  if ! is_alive "$CRON_PIDFILE" "bin/cron-daemon.ts"; then
     notify "⏰ cron-daemon was down, restarting"
     start_cron_daemon
     [ "$IN_DOCKER" = 1 ] && pkill -f '^claude' 2>/dev/null || true
