@@ -22,15 +22,9 @@ set -u
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# Load .env so $TELEGRAM_CHAT_ID is available (best-effort; chat may
-# already be set in env).
-if [ -f .env ]; then
-  set -a
-  # shellcheck disable=SC1091
-  . ./.env
-  set +a
-fi
-
+# TELEGRAM_CHAT_ID is expected in the env: Docker-compose pulls it in via
+# env_file: .env; host installs export it before invoking. Empty just
+# disables Telegram alerts — daemons still get respawned.
 CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 INTERVAL="${WATCHDOG_INTERVAL:-60}"
 ONCE=0
