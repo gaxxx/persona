@@ -10,6 +10,7 @@
 import { existsSync, mkdirSync, appendFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { sendMessage } from "./telegram";
+import { userDateAndHm } from "./user-tz";
 
 const ROOT = resolve(import.meta.dir, "../..");
 
@@ -28,8 +29,9 @@ export function etIsoNow(): string {
 }
 
 export function etDateAndHm(): { date: string; hm: string } {
-  const iso = etIsoNow();
-  return { date: iso.slice(0, 10), hm: iso.slice(11, 16) };
+  // Honors USER.md Timezone (falls back to system local). Name kept for
+  // backwards compat — "et" is now a misnomer when the user travels.
+  return userDateAndHm();
 }
 
 export async function runClaude(

@@ -16,6 +16,7 @@
  */
 import { getUpdates, downloadFile, sendTyping, sendMessage, type TelegramMessage } from "./lib/telegram";
 import { registerSession } from "./lib/session-registry";
+import { userDateAndHm } from "./lib/user-tz";
 import { mkdirSync, existsSync, appendFileSync, statSync, readFileSync } from "fs";
 import type { Subprocess } from "bun";
 
@@ -67,6 +68,8 @@ If \`reply_to\` is set, the user is replying to an earlier message. Use it as co
 Read CLAUDE.md (in cwd) for behaviour. Use the assistant-loop skill mechanics:
 read identity/user/conversation context, route to skills/MCP tools, reply via
 \`bun run bin/tg-send.ts <chat_id> "<msg>"\`, log to data/conversations/YYYY-MM-DD.md.
+
+Conversation log timestamps MUST be in the user's wall-clock time (per USER.md \`Timezone\`), NOT UTC. The filename's YYYY-MM-DD and the \`[HH:MM]\` prefix on each line should both reflect the user's local day. Get a correct timestamp by running \`bun run bin/lib/user-tz.ts\` (prints \`YYYY-MM-DD HH:MM <tz>\`) — never construct from \`new Date().toISOString()\`, which is UTC and rolls past midnight ~5 hours before her wall clock does.
 
 Conversation log loading discipline (overrides the skill's "always load" step):
 - FIRST turn after spawn: read today's conversation log as the skill requires.
@@ -346,7 +349,7 @@ async function rotateIfNeeded() {
 const lastSeenLogSizes: Record<string, number> = {};
 
 function todayLogPath(): { date: string; path: string } {
-  const date = new Date().toISOString().slice(0, 10);
+  const { date } = userDateAndHm();
   return { date, path: `data/conversations/${date}.md` };
 }
 
@@ -435,13 +438,7 @@ async function handleStatsCommand(chatId: number): Promise<void> {
   // renders this as a <pre><code> block (monospaced, lines preserved).
   await sendMessage(chatId, "```\n" + body + "\n```");
   // Log both halves so the conversation file stays consistent.
-  const { date, hm } = (() => {
-    const d = new Date();
-    return {
-      date: d.toISOString().slice(0, 10),
-      hm: d.toTimeString().slice(0, 5),
-    };
-  })();
+  const { date, hm } = userDateAndHm();
   const logPath = `data/conversations/${date}.md`;
   if (!existsSync("data/conversations")) mkdirSync("data/conversations", { recursive: true });
   appendFileSync(
