@@ -18,11 +18,8 @@ import { registerSession, type SessionRole } from "./lib/session-registry";
 
 const HOME = process.env.HOME ?? "";
 const REPO_ROOT = resolve(import.meta.dir, "..");
-const PROJECTS_DIR = resolve(
-  HOME,
-  ".claude-loop/projects",
-  REPO_ROOT.replaceAll("/", "-"),
-);
+const CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR ?? resolve(HOME, ".claude");
+const PROJECTS_DIR = resolve(CONFIG_DIR, "projects", REPO_ROOT.replaceAll("/", "-"));
 
 function findCurrentSessionId(): string | null {
   if (!existsSync(PROJECTS_DIR)) return null;
@@ -57,8 +54,10 @@ if (role !== "tg" && role !== "loop" && role !== "cron") {
 
 const sid = findCurrentSessionId();
 if (!sid) {
-  console.error("no session jsonl found in", PROJECTS_DIR);
-  process.exit(1);
+  // Best-effort: registration is a stats optimization, not a hard requirement.
+  // Don't exit non-zero — callers (e.g. /assistant-loop) shouldn't abort.
+  console.error("no session jsonl found in", PROJECTS_DIR, "— skipping registration");
+  process.exit(0);
 }
 
 const wrote = registerSession(sid, role);

@@ -15,11 +15,8 @@ import { loadRegistry } from "./lib/session-registry";
 
 const HOME = process.env.HOME ?? "";
 const REPO_ROOT = resolve(import.meta.dir, "..");
-const PROJECTS_DIR = resolve(
-  HOME,
-  ".claude-loop/projects",
-  REPO_ROOT.replaceAll("/", "-"),
-);
+const CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR ?? resolve(HOME, ".claude");
+const PROJECTS_DIR = resolve(CONFIG_DIR, "projects", REPO_ROOT.replaceAll("/", "-"));
 const CRON_LOG = resolve(import.meta.dir, "../data/cron.log");
 const TG_STDERR = "/tmp/tg-daemon-stderr.log";
 const TG_MAX_TURNS = 25;
