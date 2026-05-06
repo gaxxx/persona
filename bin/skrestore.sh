@@ -6,7 +6,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-set -a; [ -f .env ] && . ./.env; set +a
+if [ -z "${VAULT_PATH:-}" ] && [ -f .env ]; then
+  set -a; . ./.env; set +a
+fi
 : "${VAULT_PATH:?VAULT_PATH not set — add it to .env}"
 
 VAULT_SKILLS="$VAULT_PATH/persona/.claude/skills"
