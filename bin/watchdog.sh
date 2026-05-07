@@ -37,6 +37,12 @@ PIDDIR="$REPO_ROOT/data"
 mkdir -p "$PIDDIR"
 TG_PIDFILE="$PIDDIR/tg-daemon.pid"
 CRON_PIDFILE="$PIDDIR/cron-daemon.pid"
+TG_HEARTBEAT="$PIDDIR/tg-daemon-heartbeat"
+# Stuck-loop threshold: tg-daemon stamps the heartbeat at the top of every
+# poll iteration (long-poll = 25s). If the file is older than this, the
+# loop is wedged in getUpdates / downloadAttachment / dispatch even though
+# the process is still alive. Silent kill+respawn — no Telegram alert.
+HEARTBEAT_MAX_AGE="${HEARTBEAT_MAX_AGE:-90}"
 
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] watchdog: $*" >&2; }
 
@@ -89,12 +95,31 @@ start_cron_daemon() {
   disown
 }
 
+is_heartbeat_fresh() {
+  [ -f "$TG_HEARTBEAT" ] || return 1
+  local mtime now age
+  mtime=$(stat -c %Y "$TG_HEARTBEAT" 2>/dev/null) || return 1
+  now=$(date +%s)
+  age=$(( now - mtime ))
+  [ "$age" -le "$HEARTBEAT_MAX_AGE" ]
+}
+
 check_once() {
   adopt_existing "$TG_PIDFILE" "bin/tg-daemon.ts"
   adopt_existing "$CRON_PIDFILE" "bin/cron-daemon.ts"
 
   if ! is_alive "$TG_PIDFILE" "bin/tg-daemon.ts"; then
+    # Process actually died — operator should know.
     notify "🦌 tg-daemon was down, restarting"
+    start_tg_daemon
+  elif ! is_heartbeat_fresh; then
+    # Process alive but loop wedged. Self-heal silently — no Telegram ping.
+    local pid
+    pid=$(cat "$TG_PIDFILE" 2>/dev/null)
+    log "tg-daemon heartbeat stale (>${HEARTBEAT_MAX_AGE}s), silent respawn pid=$pid"
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+    sleep 2
+    [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
     start_tg_daemon
   fi
   if ! is_alive "$CRON_PIDFILE" "bin/cron-daemon.ts"; then

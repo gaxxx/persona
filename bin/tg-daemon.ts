@@ -17,11 +17,12 @@
 import { getUpdates, downloadFile, sendTyping, sendMessage, type TelegramMessage } from "./lib/telegram";
 import { registerSession } from "./lib/session-registry";
 import { userDateAndHm } from "./lib/user-tz";
-import { mkdirSync, existsSync, appendFileSync, statSync, readFileSync } from "fs";
+import { mkdirSync, existsSync, appendFileSync, statSync, readFileSync, writeFileSync } from "fs";
 import type { Subprocess } from "bun";
 
 const OFFSET_FILE = "data/tg-offset.json";
 const LOG_FILE = "data/daemon.log";
+const HEARTBEAT_FILE = "data/tg-daemon-heartbeat";
 const LONG_POLL_TIMEOUT = 25;
 // Cap external-writes payload to keep event JSON sane. If an unusually huge
 // cron output appears between turns, the payload gets truncated and claude
@@ -563,6 +564,12 @@ process.on("SIGINT", () => stop("SIGINT"));
 process.on("SIGTERM", () => stop("SIGTERM"));
 
 while (!stopping) {
+  // Stamp heartbeat at the top of each iteration. If getUpdates hangs, or
+  // dispatch (downloadAttachment / inner-claude turn) hangs, this file
+  // stops aging — watchdog uses staleness to detect a wedged loop and
+  // silently respawn us.
+  try { writeFileSync(HEARTBEAT_FILE, new Date().toISOString()); } catch {}
+
   let updates;
   try {
     updates = await getUpdates(offset, LONG_POLL_TIMEOUT);
