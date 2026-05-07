@@ -167,6 +167,10 @@ function spawnClaude(): ClaudeProc {
         const line = buf.slice(0, idx);
         buf = buf.slice(idx + 1);
         if (!line.trim()) continue;
+        // Refresh heartbeat on every claude event — a long but actively
+        // progressing turn (multi-tool research, etc.) keeps the watchdog
+        // satisfied. Only true silence means stuck.
+        try { writeFileSync(HEARTBEAT_FILE, new Date().toISOString()); } catch {}
         log("claude:", line);
         let ev: {
           type?: string;

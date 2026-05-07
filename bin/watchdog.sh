@@ -38,11 +38,13 @@ mkdir -p "$PIDDIR"
 TG_PIDFILE="$PIDDIR/tg-daemon.pid"
 CRON_PIDFILE="$PIDDIR/cron-daemon.pid"
 TG_HEARTBEAT="$PIDDIR/tg-daemon-heartbeat"
-# Stuck-loop threshold: tg-daemon stamps the heartbeat at the top of every
-# poll iteration (long-poll = 25s). If the file is older than this, the
-# loop is wedged in getUpdates / downloadAttachment / dispatch even though
-# the process is still alive. Silent kill+respawn — no Telegram alert.
-HEARTBEAT_MAX_AGE="${HEARTBEAT_MAX_AGE:-90}"
+# Stuck-loop threshold. tg-daemon stamps the heartbeat at the top of each
+# poll cycle (~25s) AND on every inner-claude stdout event, so any
+# legitimate progress — long multi-tool turn, slow download — keeps it
+# fresh. Only true silence ages it. 180s gives slack for pathological
+# multi-MB downloads on slow links without false-positive-killing healthy
+# turns. Silent kill+respawn when tripped — no Telegram alert.
+HEARTBEAT_MAX_AGE="${HEARTBEAT_MAX_AGE:-180}"
 
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] watchdog: $*" >&2; }
 
