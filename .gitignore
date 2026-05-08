@@ -9,12 +9,13 @@ credentials/
 .mcp.json
 Obsidian
 
-# Per-user CLAUDE.md - real file lives at <vault>/persona/CLAUDE.md, symlinked
-# into the repo root (Claude Code auto-loads CLAUDE.md from cwd). Template:
-# CLAUDE.example.md. Setup wizard wires this up.
+# Per-user CLAUDE.md / CLAUDE.local.md — real files at repo root, synced
+# with <vault>/persona/ via bin/pbackup.sh / pstore.sh.
+# Claude Code auto-loads both from cwd. Template: CLAUDE.example.md.
 # CRON.md isn't here because it lives directly at <vault>/persona/CRON.md;
 # bin/cron-daemon.ts reads $VAULT_PATH/persona/CRON.md, no repo-root copy.
 CLAUDE.md
+CLAUDE.local.md
 
 # Skills: most are personal/vault-backed and stay out of git. Track only
 # the shared ones that should ship with the repo.
@@ -22,6 +23,7 @@ CLAUDE.md
 !.claude/skills/assistant-loop/
 !.claude/skills/assistant-test/
 !.claude/skills/kb/
+!.claude/skills/onboarding
 
 # Editor swap files
 *.swp

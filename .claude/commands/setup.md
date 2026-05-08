@@ -10,12 +10,27 @@ The goal is one continuous interactive flow that gets a fresh checkout from `git
 
 ## Flow
 
+### 0. Pick language(s) (very first thing)
+
+If `<vault>/persona/USER.md` already exists with `Language:` set to something other than "not set", **skip this step** and use the existing value (re-runs shouldn't re-ask). Otherwise:
+
+```
+Pick languages (primary first, comma-separated): zh / en / zh,en [zh]:
+想用什么语言？多语言用逗号分开，第一个是 primary：
+```
+
+Single value → mono-lingual user. Comma-separated → multi-lingual; first is primary. Common answers: `zh`, `en`, `zh,en`, `en,zh`. Treat `中文` / `cn` / empty as `zh`; `english` / `英文` as `en`. Other ISO codes (`ja`, `de`, ...) accepted verbatim.
+
+Map codes to the names that get written to USER.md: `zh` → `中文`, `en` → `English`, others → leave the code (model will infer).
+
+Hold the chosen list in memory and **switch every remaining prompt in this wizard to the primary**. We'll write it to `USER.md` later in step 4 so onboarding (over Telegram) never has to detect it.
+
 ### 1. Detect state
 
 Run a quick audit before asking anything. For each item, note done / missing / partial:
 
 - `.env` exists at repo root, and has non-empty `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `VAULT_PATH`, `TZ`.
-- `CLAUDE.md` at repo root is a symlink to `<vault>/persona/CLAUDE.md`, and the target file exists.
+- `CLAUDE.md` at repo root is a real file, and `<vault>/persona/CLAUDE.md` also exists.
 - `<vault>/persona/CRON.md` exists (optional - only if user wants scheduled tasks). No repo-root copy; cron-daemon reads it directly via `$VAULT_PATH`.
 - Vault directory exists (path from `$VAULT_PATH` or `/vault` if running inside Docker).
 - `<vault>/persona/` exists.
@@ -57,21 +72,20 @@ Write all values to `.env`. If `.env` already has some keys, edit in place rathe
 
 Both files store personal config that belongs in the vault, but they're consumed differently:
 
-- **`CLAUDE.md`** is auto-loaded by Claude Code from cwd, so the repo root must have a copy. We make it a symlink: real file at `<vault>/persona/CLAUDE.md`, repo root has `CLAUDE.md → <vault>/persona/CLAUDE.md` (gitignored).
+- **`CLAUDE.md`** (and optional `CLAUDE.local.md`) is auto-loaded by Claude Code from cwd. We keep it as a **real file** at the repo root (gitignored) and use `bin/pbackup.sh` / `bin/pstore.sh` to sync with `<vault>/persona/CLAUDE.md`. A `Stop` hook in `.claude/settings.local.json` auto-runs `pbackup` after each session so edits flow back to the vault.
 - **`CRON.md`** is only read by `bin/cron-daemon.ts`, which resolves `$VAULT_PATH/persona/CRON.md` directly. No repo-root copy needed.
 
 **For `CLAUDE.md`**, dispatch on state:
 
-- **Vault file missing AND repo symlink missing**: copy `CLAUDE.example.md` to `<vault>/persona/CLAUDE.md`, then `ln -s "<vault>/persona/CLAUDE.md" CLAUDE.md`.
-- **Vault file missing AND repo file is a regular file (not symlink)**: legacy layout. `mv CLAUDE.md "<vault>/persona/CLAUDE.md" && ln -s "<vault>/persona/CLAUDE.md" CLAUDE.md`. Tell the user what you did.
-- **Vault file exists AND repo symlink missing**: just `ln -s "<vault>/persona/CLAUDE.md" CLAUDE.md`.
-- **Both correct**: skip.
+- **Both missing**: `cp CLAUDE.example.md "$VAULT_PATH/persona/CLAUDE.md" && cp CLAUDE.example.md CLAUDE.md`.
+- **Vault has it, repo doesn't**: `bash bin/pstore.sh` (copies vault → repo).
+- **Repo has it, vault doesn't**: `bash bin/pbackup.sh` (copies repo → vault).
+- **Both exist but content drifted**: vault wins — run `pstore`. (Stop hook keeps them in sync going forward; drift means pbackup didn't run cleanly.)
+- **Both in sync**: skip.
 
-**For `CRON.md`**, ask first: "Want scheduled tasks (daily journal, weekly review, ...)?" If yes and `<vault>/persona/CRON.md` is missing, copy `CRON.example.md` to `<vault>/persona/CRON.md`. No symlink needed. If they decline, skip.
+**For `CRON.md`**, ask first: "Want scheduled tasks (daily journal, weekly review, ...)?" If yes and `<vault>/persona/CRON.md` is missing, copy `CRON.example.md` to `<vault>/persona/CRON.md`. No repo-root copy needed.
 
-Use the absolute `$VAULT_PATH` from `.env` for the symlink target so it survives `cd` and works inside Docker (the Docker mount aliases `$VAULT_PATH` to `/vault`).
-
-### 4. Vault skeleton + kb-impl
+### 4. Vault skeleton + kb-impl + persona files
 
 ```bash
 mkdir -p "$VAULT_PATH/persona/.claude/skills"
@@ -81,6 +95,13 @@ mkdir -p "$VAULT_PATH/raw"
 If `<vault>/persona/.claude/skills/kb-impl/` is missing:
 - Offer to copy the minimal flat-folder starter: `cp -r share/skills/kb/examples/minimal "$VAULT_PATH/persona/.claude/skills/kb-impl"`
 - Tell them they can replace it later with PARA / Logseq / their own thing.
+
+**Copy USER.md and IDENTITY.md skeletons** (so onboarding has files to fill, and language is pre-set):
+
+- If `<vault>/persona/USER.md` is missing: `cp USER.example.md "$VAULT_PATH/persona/USER.md"`, then edit the `Language` line to the chosen list from step 0 (e.g. `中文`, `English`, `中文, English` — primary first, comma-separated). Use the Edit tool, not sed — preserve existing structure.
+- If `<vault>/persona/IDENTITY.md` is missing: `cp IDENTITY.example.md "$VAULT_PATH/persona/IDENTITY.md"`. No language to prefill there.
+
+Don't overwrite existing files — if either already exists, skip and tell the user (re-runs are common).
 
 ### 5. Wire up .claude/skills
 
@@ -124,8 +145,8 @@ Setup complete. Next steps:
   docker compose exec persona claude        # attach (run /login first time)
   docker compose exec persona claude /assistant-loop
 
-Then message your bot. Onboarding fills in IDENTITY.md and USER.md on the
-first message - just say hi.
+Then message your bot. The `onboarding` skill auto-triggers on the first
+message and fills in USER.md / IDENTITY.md conversationally — just say hi.
 ```
 
 If they're already inside the running container, skip the docker lines and just tell them to run `/assistant-loop`.
