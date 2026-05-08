@@ -25,6 +25,21 @@ set -u
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Self-wrap with a pseudoterminal if our session has no controlling TTY.
+# claude-code 2.1.133 + Haiku 4.5 in stream-json mode exits per turn when the
+# inner claude's session has no controlling TTY. Daemons spawned by this
+# watchdog inherit our session's controlling TTY, so wrapping here covers
+# them. The WATCHDOG_PTY_WRAPPED guard prevents infinite re-exec loops.
+if [ "${WATCHDOG_PTY_WRAPPED:-0}" != "1" ] && [ "${1:-}" != "--once" ]; then
+  my_tty=$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')
+  if [ -z "$my_tty" ] || [ "$my_tty" = "?" ]; then
+    export WATCHDOG_PTY_WRAPPED=1
+    # `setsid` so the new session can claim its own controlling TTY.
+    # `script` allocates the PTY and runs us as its child.
+    exec setsid script -qfc "bash $0 $*" /tmp/watchdog.log < /dev/null > /dev/null 2>&1
+  fi
+fi
+
 # TELEGRAM_CHAT_ID is expected in the env: Docker-compose pulls it in via
 # env_file: .env; host installs export it before invoking. Empty just
 # disables Telegram alerts — daemons still get respawned.

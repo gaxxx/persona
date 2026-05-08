@@ -85,13 +85,12 @@ If preflight passes, proceed to step 1.
 
 ### 2. Verify the watchdog is alive
 
-`pgrep -f bin/watchdog.sh`. If not running, spawn it under a PTY so daemons it later spawns inherit a controlling TTY (claude-code 2.1.133 + Haiku 4.5 misbehaves without one — exits per turn):
-
+`pgrep -f bin/watchdog.sh`. If not running, spawn it:
 ```bash
-setsid script -qc "bash bin/watchdog.sh" /tmp/watchdog.log < /dev/null > /dev/null 2>&1 & disown
+nohup bash bin/watchdog.sh > /dev/null 2>&1 & disown
 ```
 
-`setsid` detaches from any inherited terminal; `script` allocates a fresh pseudoterminal that watchdog and its descendants share.
+(`watchdog.sh` self-wraps with a pseudoterminal at the top — no extra setsid/script needed here, regardless of whether the caller has a controlling TTY.)
 
 ### 3. Quick daemon status
 
