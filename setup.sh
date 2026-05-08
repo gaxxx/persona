@@ -88,11 +88,14 @@ echo "  ✓ vault: $VAULT_PATH"
 echo
 say "→ 写入 .env" "→ Writing .env"
 touch .env
-set_kv() {  # set_kv KEY VALUE
+set_kv() {  # set_kv KEY VALUE  (portable in-place edit via temp file)
   local key="$1" val="$2"
   if grep -qE "^${key}=" .env; then
-    # macOS sed -i requires '' as backup; use perl for portability
-    perl -i -pe "s|^${key}=.*|${key}=${val}|" .env
+    local tmp; tmp=$(mktemp)
+    awk -v k="$key" -v v="$val" '
+      $0 ~ "^"k"=" { print k"="v; next }
+      { print }
+    ' .env > "$tmp" && mv "$tmp" .env
   else
     printf '%s=%s\n' "$key" "$val" >> .env
   fi
@@ -115,7 +118,11 @@ mkdir -p "$VAULT_PATH/persona/.claude/skills" "$VAULT_PATH/raw" "$VAULT_PATH/kb"
 
 # Prefill USER.md Language field if it's still "not set"
 if grep -q "^- \*\*Language:\*\* not set" "$VAULT_PATH/persona/USER.md"; then
-  perl -i -pe "s|^- \*\*Language:\*\* not set.*|- **Language:** $LANG_NAME|" "$VAULT_PATH/persona/USER.md"
+  tmp=$(mktemp)
+  awk -v lang="$LANG_NAME" '
+    /^- \*\*Language:\*\* not set/ { print "- **Language:** " lang; next }
+    { print }
+  ' "$VAULT_PATH/persona/USER.md" > "$tmp" && mv "$tmp" "$VAULT_PATH/persona/USER.md"
 fi
 
 # Repo-root CLAUDE.md (gitignored real file, synced via pbackup/pstore)
