@@ -21,9 +21,9 @@ Three independent processes talk to a shared filesystem and persona config:
 - The interactive REPL you `claude` into - ad-hoc work and on-demand status checks via `/assistant-loop`.
 
 Skills:
-- `/setup` is a tracked slash command at `.claude/commands/setup.md`, so it works the moment you `git clone` - no bootstrap step needed. Nothing else lives under `.claude/` in the repo.
-- The shipped skills (`assistant-loop`, `assistant-test`, `kb` interface stub) live as templates in `share/skills/`. `/setup` copies them into `<vault>/persona/.claude/skills/` and symlinks each back into `.claude/skills/`. After that, the vault owns those skills and you can edit them freely. Re-run `./bin/link-skills.sh` after pulling repo changes — it diffs vs your vault copy and asks before overwriting.
-- Personal skills you author go straight into the vault.
+- `/setup` is a tracked slash command at `.claude/commands/setup.md`, so it works the moment you `git clone`.
+- The shipped skills (`assistant-loop`, `assistant-test`, `kb` interface stub, `onboarding`) are committed directly under `.claude/skills/` per `.gitignore` exception list. Edit them freely; pull upstream updates with `git pull`.
+- Personal skills you author live as gitignored real directories under `.claude/skills/<name>/`. They're mirrored to `<vault>/persona/.claude/skills/` via `bin/pbackup.sh` (auto-runs on every Claude Code Stop hook) and pulled back via `bin/pstore.sh`.
 
 ## Setup
 
@@ -32,7 +32,7 @@ git clone <repo-url> persona && cd persona
 claude                # then type:  /setup
 ```
 
-`/setup` is an interactive wizard - it walks through `.env`, validates your Telegram bot token, sends a test message to your chat_id, provisions the vault skeleton, copies the starter `kb-impl`, and wires up `.claude/skills` as a symlink to the vault. Idempotent; safe to re-run.
+`/setup` is an interactive wizard - it picks your language, walks through `.env`, validates your Telegram bot token, sends a test message to your chat_id, provisions the vault skeleton (default `./Obsidian` sibling folder), copies `STRUCTURE.md` + `CLAUDE.md` + persona skeletons, and offers the starter `kb-impl`. Idempotent; safe to re-run.
 
 After `/setup` finishes:
 

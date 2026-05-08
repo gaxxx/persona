@@ -5,7 +5,7 @@
 # Scope:
 #   - personal skills under .claude/skills/<name>/  (those NOT in SHARED_SKILLS,
 #     which are committed to git per .gitignore exception list)
-#   - CLAUDE.md (real file at repo root, expected after de-symlink)
+#   - CLAUDE.md (real file at repo root)
 #   - CLAUDE.local.md (optional personal-overrides split)
 #
 # NOT in scope (lives in vault directly, no repo copy):

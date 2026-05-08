@@ -12,8 +12,8 @@ Three independent processes talk to a shared filesystem + persona:
 - **Main REPL** - the interactive Claude Code session you `claude` into; handles ad-hoc work. Runs `/assistant-loop` once on entry to (re)spawn the watchdog if needed and check daemon status; no background heartbeat.
 
 Skills are split into two layers:
-- **Generic** (this repo): `assistant-loop`, `assistant-test`, `kb` interface stub.
-- **Personal** (your vault): `kb-impl` (your knowledge-base implementation), plus anything else like `game-time`, `ds160`, etc. The vault dir is exposed to the repo via a single `.claude/skills` symlink.
+- **Shared** (committed in this repo at `.claude/skills/`): `assistant-loop`, `assistant-test`, `kb` interface stub, `onboarding`. Tracked by git per `.gitignore` exception list.
+- **Personal** (gitignored): `kb-impl` (your knowledge-base implementation), plus anything else like `game-time`, `ds160`, etc. They live as real directories under `.claude/skills/<name>/` in the repo, and are mirrored to `<vault>/persona/.claude/skills/` via `bin/pbackup.sh` / `bin/pstore.sh` (a `Stop` hook auto-pushes after every Claude Code session).
 
 ## Prerequisites
 
@@ -31,7 +31,7 @@ git clone <repo-url> persona && cd persona
 claude                # then type:  /setup
 ```
 
-`/setup` validates your Telegram token (calls `getMe`), sends a test message to your `chat_id`, writes `.env`, copies `CLAUDE.md` from the example, provisions `<vault>/persona/`, copies the minimal `kb-impl` starter, and runs `bin/link-skills.sh`. Idempotent - safe to re-run when you switch vaults or rotate tokens.
+`/setup` validates your Telegram token (calls `getMe`), sends a test message to your `chat_id`, writes `.env`, copies `CLAUDE.md` and `STRUCTURE.md` from examples, provisions `<vault>/persona/`, and offers the minimal `kb-impl` starter. Idempotent - safe to re-run when you switch vaults or rotate tokens.
 
 If you'd rather do it by hand, the same steps:
 
@@ -50,11 +50,12 @@ mkdir -p "$VAULT_PATH"/{persona,raw}
 # which creates IDENTITY.md and USER.md interactively.
 
 # Pick a kb implementation (or write your own):
-cp -r share/skills/kb/examples/minimal "$VAULT_PATH/persona/.claude/skills/kb-impl"
+cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/persona/.claude/skills/kb-impl"
 # This is a flat-folder starter. Read it, customize, or replace with PARA / Logseq / etc.
 
-# 3. Install shared skills into your vault and symlink them back
-./bin/link-skills.sh
+# 3. Sync personal files (CLAUDE.md, personal skills) between repo and vault
+bash bin/pstore.sh   # vault -> repo  (after fresh clone)
+# bash bin/pbackup.sh  # repo -> vault (after edits; Stop hook does this automatically)
 
 # 4. Add scheduled tasks (optional)
 cp CRON.example.md "$VAULT_PATH/persona/CRON.md"
@@ -76,18 +77,18 @@ docker compose exec persona tmux attach -t loop   # attach (Ctrl-B D to detach)
 | Layer | Lives in | Examples | Tracked? |
 |---|---|---|---|
 | Generic infra | this repo | `bin/{tg,cron}-daemon.ts`, `.env.example`, Dockerfile, SETUP.md | yes |
-| Generic skills | `repo/share/skills/` | `assistant-loop`, `assistant-test`, `kb` (interface stub), `setup` | yes |
-| Personal config (repo, gitignored) | repo root | `.env`, `CLAUDE.md` (symlink to vault) | no |
+| Shared skills | `.claude/skills/<name>/` | `assistant-loop`, `assistant-test`, `kb` (interface stub), `onboarding` | yes (per `.gitignore` exceptions) |
+| Personal config (repo, gitignored) | repo root | `.env`, `CLAUDE.md`, `CLAUDE.local.md` | no |
 | Personal config (vault) | `<vault>/persona/` | `CLAUDE.md`, `CRON.md`, `USER.md`, `IDENTITY.md`, `MEMORY.md`, `tasks.md` | yes (vault is yours) |
-| Personal skills | `<vault>/persona/.claude/skills/` | `kb-impl`, plus anything you write | no (vault is yours) |
+| Personal skills (repo, gitignored) | `.claude/skills/<name>/` | `kb-impl`, plus anything you write | no |
+| Personal skills (vault backup) | `<vault>/persona/.claude/skills/<name>/` | mirror of above | yes (vault is yours) |
 
-`/setup` ships as a tracked slash command at `.claude/commands/setup.md`, so it works the moment you `git clone` (no symlinks required yet). Nothing else under `.claude/` is tracked. `bin/link-skills.sh` manages the shared skills (`assistant-loop`, `assistant-test`, `kb`):
+`/setup` ships as a tracked slash command at `.claude/commands/setup.md`, so it works the moment you `git clone`. Shared skills are committed directly into `.claude/skills/` (per `.gitignore` exception list) and need no install step. Personal skills + `CLAUDE.md` (+ optional `CLAUDE.local.md`) are gitignored real files synced with the vault via `bin/pbackup.sh` / `bin/pstore.sh`:
 
-1. **Copies** each template from `share/skills/` into `<vault>/persona/.claude/skills/` as a real dir. Your vault becomes the working copy - edit freely.
-2. **Symlinks** that vault copy back into `.claude/skills/<name>`.
-3. Every subsequent run diffs each shared skill against `share/skills/` and asks y/N before overwriting if they differ; in-sync skills stay quiet.
+- **`pstore`** copies `<vault>/persona/CLAUDE.md` and personal-skill dirs INTO the repo. Run after a fresh clone or when restoring local state.
+- **`pbackup`** copies the same files OUT of the repo into the vault. A `Stop` hook in `.claude/settings.local.json` runs this automatically after every Claude Code session.
 
-Personal skills are yours to manage. The simplest path is to create them directly in `.claude/skills/<name>/` — `.gitignore` excludes everything under `.claude/skills/`, so they stay out of git automatically. If you want a personal skill backed up via your Obsidian vault, write it in `<vault>/persona/.claude/skills/<name>/` and symlink it yourself: `ln -s "$VAULT_PATH/persona/.claude/skills/<name>" .claude/skills/<name>`.
+Vault is canonical; on drift, `pstore` wins.
 
 ## kb interface vs implementation
 
@@ -95,7 +96,7 @@ The `/kb` skill in this repo is a thin **interface** - it documents the contract
 
 This decouples callers from layout choices. Other skills should call `/kb put <file>` and use the returned path; never hard-code paths. Different users can plug in PARA + Obsidian, Logseq, or plain folders without touching repo code.
 
-A minimal flat-folder example implementation ships at `share/skills/kb/examples/minimal/` - copy it as a starting point.
+A minimal flat-folder example implementation ships at `.claude/skills/kb/examples/minimal/` - copy it as a starting point.
 
 ## Authenticating Claude Code
 
@@ -130,32 +131,33 @@ Each task is expected to update its own `**Last run:**` line when it fires.
 repo/
 ├── bin/
 │   ├── tg-daemon.ts            # Telegram I/O daemon
-│   ├── tg-send.ts / tg-typing.ts / tg-pull.ts / tg-watch.ts
+│   ├── tg-send.ts / tg-typing.ts
 │   ├── cron-daemon.ts          # scheduled-task daemon
-│   └── link-skills.sh          # wires up .claude/skills as a symlink
-├── .claude/commands/setup.md   # tracked - /setup slash command bootstrap
-├── share/skills/               # generic templates copied into vault on /setup
-│   ├── assistant-loop/
-│   ├── assistant-test/
-│   └── kb/                     # interface stub
-│       └── examples/minimal/   # starter kb-impl
-├── .claude/skills/             # all entries are symlinks to vault (gitignored)
-│   └── <name>@                 # populated by bin/link-skills.sh
+│   ├── watchdog.sh             # bash supervisor
+│   ├── pbackup.sh / pstore.sh  # sync personal files (CLAUDE.md + personal skills) with vault
+│   └── ...
+├── .claude/
+│   ├── commands/setup.md       # tracked - /setup slash command
+│   ├── settings.local.json     # personal hooks/permissions (gitignored)
+│   └── skills/
+│       ├── assistant-loop/     # tracked (per .gitignore exceptions)
+│       ├── assistant-test/     # tracked
+│       ├── kb/                 # tracked - interface stub + examples/minimal/
+│       ├── onboarding/         # tracked
+│       └── <personal>/         # gitignored - mirrored to vault via pbackup
 ├── .env                        # per-user secrets (gitignored)
-├── CLAUDE.md@                  # symlink -> <vault>/persona/CLAUDE.md (gitignored)
+├── CLAUDE.md                   # gitignored real file; synced with vault via pbackup
+├── CLAUDE.local.md             # optional personal overrides (gitignored)
 └── docker-compose.yml
 
-<vault>/
+<vault>/                        # default ./Obsidian inside the repo (gitignored)
+├── STRUCTURE.md                # canonical map of vault layout
 ├── persona/
-│   ├── CLAUDE.md / CRON.md     # source of truth (CLAUDE.md is symlinked into the repo)
+│   ├── CLAUDE.md / CRON.md     # CRON.md is read directly via $VAULT_PATH; CLAUDE.md mirrors repo copy
 │   ├── IDENTITY.md / USER.md / MEMORY.md / tasks.md
-│   ├── tests/cases.md          # /assistant-test cases
-│   └── .claude/skills/         # all your skills as real dirs - personal +
-│       ├── kb-impl/            # copies of generic skills from share/skills/
-│       ├── assistant-loop/     # (edit any of these freely; they're yours)
-│       ├── ...
+│   └── .claude/skills/<name>/  # backup copies of personal skills (pbackup target)
 ├── raw/                        # /kb ingest inbox
-└── kb/ ...                     # whatever your kb-impl writes
+└── kb/                         # whatever your kb-impl writes
 ```
 
 ## Stopping / restarting
@@ -178,4 +180,4 @@ docker compose exec persona bash                   # ad-hoc shell (don't open an
 - **Cron tasks rejected with "TELEGRAM_CHAT_ID not set"** - bin scripts enforce a chat allowlist; ensure `.env` has `TELEGRAM_CHAT_ID=<your-id>` (or `TELEGRAM_CHAT_IDS=id1,id2` for multi-user).
 - **Vault writes don't show up in Obsidian** - Google Drive bind-mounts on macOS sometimes lag a few seconds. Force-sync the Drive client or wait.
 - **MCP OAuth errors** - claude.ai connectors (Gmail, Calendar, Notion) re-auth via `~/.claude/`. Run `claude` interactively to refresh the session.
-- **`/kb <subcmd>` says "implementation not installed"** - run `cp -r share/skills/kb/examples/minimal "$VAULT_PATH/persona/.claude/skills/kb-impl"`. No relink needed.
+- **`/kb <subcmd>` says "implementation not installed"** - run `cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/persona/.claude/skills/kb-impl"`, then `bash bin/pstore.sh` to mirror it back into the repo.

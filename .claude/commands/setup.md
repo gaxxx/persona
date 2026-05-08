@@ -1,5 +1,5 @@
 ---
-description: First-time setup for the persona repo - .env, vault layout, kb-impl, personal-skill symlinks. Idempotent.
+description: First-time setup for the persona repo - language pick, .env, vault layout, kb-impl starter, personal-file sync via pbackup/pstore. Idempotent.
 ---
 
 # /setup
@@ -34,8 +34,8 @@ Run a quick audit before asking anything. For each item, note done / missing / p
 - `<vault>/persona/CRON.md` exists (optional - only if user wants scheduled tasks). No repo-root copy; cron-daemon reads it directly via `$VAULT_PATH`.
 - Vault directory exists (path from `$VAULT_PATH` or `/vault` if running inside Docker).
 - `<vault>/persona/` exists.
-- `<vault>/persona/.claude/skills/kb-impl/` exists (any directory or symlink).
-- `.claude/skills` in the repo is a symlink to `<vault>/persona/.claude/skills/`.
+- `<vault>/persona/.claude/skills/kb-impl/` exists.
+- `.claude/skills/<personal>/` real dirs in the repo match the vault backup (run `pstore` if drifted).
 - `bin/watchdog.sh` exists and is executable (`-x`). This is the daemon supervisor — without it, `/assistant-loop` can't keep daemons alive when the REPL is closed.
 
 Tell the user what you found in 4-5 lines, then offer to fill the gaps.
@@ -58,10 +58,11 @@ For each missing value, ask one question at a time. Don't dump a multi-question 
 - If they don't receive it, the chat_id is wrong (or they haven't messaged the bot yet - Telegram requires the user to start the bot first).
 
 **VAULT_PATH**
-- Ask for an absolute path to a folder they want to treat as their vault. Can be empty.
+- Default: `./Obsidian` (a sibling folder inside the repo, gitignored). Offer this as the suggested answer; user can override with any absolute path.
+- Resolve relative paths to absolute before writing to `.env` (use `realpath` or `$(cd path && pwd)`), so daemons and crons that run from a different cwd still find it.
 - If running inside Docker (`/vault` exists as a mount), use that as the in-container path; still ask for the host path to write into `.env` (docker-compose.yml resolves it from there).
 - Quote the path if it contains spaces: `VAULT_PATH="/path with spaces/vault"`.
-- `mkdir -p` the path if it doesn't exist.
+- `mkdir -p` the resolved path if it doesn't exist.
 
 **TZ**
 - Default to the host's timezone if detectable (`readlink /etc/localtime` or `date +%Z`). Otherwise ask. Any IANA name works.
@@ -90,10 +91,13 @@ Both files store personal config that belongs in the vault, but they're consumed
 ```bash
 mkdir -p "$VAULT_PATH/persona/.claude/skills"
 mkdir -p "$VAULT_PATH/raw"
+mkdir -p "$VAULT_PATH/kb"
 ```
 
+If `<vault>/STRUCTURE.md` is missing: `cp STRUCTURE.example.md "$VAULT_PATH/STRUCTURE.md"`. This is the canonical map that `/kb put`, `/kb query`, etc. rely on.
+
 If `<vault>/persona/.claude/skills/kb-impl/` is missing:
-- Offer to copy the minimal flat-folder starter: `cp -r share/skills/kb/examples/minimal "$VAULT_PATH/persona/.claude/skills/kb-impl"`
+- Offer to copy the minimal flat-folder starter: `cp -r .claude/skills/kb/examples/minimal .claude/skills/kb-impl` (Stop hook will mirror it to the vault on the next session end).
 - Tell them they can replace it later with PARA / Logseq / their own thing.
 
 **Copy USER.md and IDENTITY.md skeletons** (so onboarding has files to fill, and language is pre-set):
@@ -103,13 +107,17 @@ If `<vault>/persona/.claude/skills/kb-impl/` is missing:
 
 Don't overwrite existing files — if either already exists, skip and tell the user (re-runs are common).
 
-### 5. Wire up .claude/skills
+### 5. Sync personal skills + CLAUDE.md from vault
+
+Shared skills (`assistant-loop`, `assistant-test`, `kb`, `onboarding`) ship committed under `.claude/skills/` — nothing to do for them.
+
+Pull personal skills + `CLAUDE.md` (+ optional `CLAUDE.local.md`) from the vault if any exist there:
 
 ```bash
-./bin/link-skills.sh
+bash bin/pstore.sh
 ```
 
-First-run behavior: for each skill in `share/skills/` (assistant-loop, assistant-test, kb), copy it into the vault as a real dir, then symlink that vault copy back into `.claude/skills/<name>`. The script doesn't touch personal skills - those are the user's to manage. Show the output verbatim.
+If the vault is empty (fresh user), `pstore` no-ops. Going forward, the `Stop` hook in `.claude/settings.local.json` auto-runs `bin/pbackup.sh` after every Claude Code session, so vault stays in sync without manual action.
 
 ### 6. Wire up credentials
 
@@ -157,10 +165,9 @@ The bash watchdog (`bin/watchdog.sh`) survives REPL exit (spawned with `& disown
 
 `/setup` is idempotent. Common re-run scenarios:
 
-- **Switching vaults**: edit `VAULT_PATH` in `.env`, re-run `/setup`. It re-mkdirs the new vault skeleton and copies skills into it.
-- **Added a new generic skill in `share/skills/`**: re-run just `./bin/link-skills.sh` (it installs missing skills, leaves existing ones alone).
-- **Pulled repo updates and want them in the vault**: re-run `./bin/link-skills.sh`. For each shared skill that differs, it shows a diff and asks y/N before overwriting. Skills already in sync stay quiet.
-- **Authoring a personal skill**: simplest is to create it directly in `.claude/skills/<name>/` (gitignored). If you want it backed up via the vault, put it under `<vault>/persona/.claude/skills/<name>/` and symlink it yourself - `link-skills.sh` only manages shared skills.
+- **Switching vaults**: edit `VAULT_PATH` in `.env`, re-run `/setup`. It re-mkdirs the new vault skeleton; run `bash bin/pbackup.sh` first if you want personal files mirrored to the new vault.
+- **Pulled repo updates and want them locally**: shared skills come in via `git pull` (they're committed). For personal-skill drift, run `bash bin/pstore.sh`.
+- **Authoring a personal skill**: create it directly under `.claude/skills/<name>/` (gitignored). The Stop hook auto-pushes it to `<vault>/persona/.claude/skills/<name>/` after each session.
 - **Rotated bot token**: edit `TELEGRAM_BOT_TOKEN` in `.env`, re-run `/setup` - it re-validates.
 - **Added a new credential dir** (e.g. dropped `credentials/.foo-mcp/`): re-run just `./bin/link-credentials.sh`. It's idempotent and only links what's missing.
 

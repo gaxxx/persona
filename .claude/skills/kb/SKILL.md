@@ -35,16 +35,16 @@ To see what your impl supports: `cat <vault>/persona/.claude/skills/kb-impl/SKIL
 
 ## Implementation
 
-This file is a stub. Concrete behavior comes from `<vault>/persona/.claude/skills/kb-impl/SKILL.md` (and its `references/`). The repo's `.claude/skills` directory is a symlink to `<vault>/persona/.claude/skills/`, so any `kb-impl/` you put in the vault is visible to Claude Code automatically.
+This file is a stub. Concrete behavior comes from `kb-impl/SKILL.md` (and its `references/`). `kb-impl/` lives as a real directory at `.claude/skills/kb-impl/` (gitignored) and is mirrored to `<vault>/persona/.claude/skills/kb-impl/` via `bin/pbackup.sh` (auto-runs on Claude Code Stop hook).
 
 If `kb-impl/` is missing on disk, `/kb <subcommand>` (other than the documented core 3) should respond: "kb implementation skill is not installed; configure `<vault>/persona/.claude/skills/kb-impl/` per SETUP.md".
 
 ## Starting from scratch
 
-A minimal flat-folder example implementation lives at [`examples/minimal/SKILL.md`](examples/minimal/SKILL.md). Copy it to your vault to get started:
+A minimal flat-folder example implementation lives at [`examples/minimal/SKILL.md`](examples/minimal/SKILL.md). Copy it into your repo `.claude/skills/` to get started:
 
 ```bash
-cp -r share/skills/kb/examples/minimal "$VAULT_PATH/persona/.claude/skills/kb-impl"
+cp -r .claude/skills/kb/examples/minimal .claude/skills/kb-impl
 ```
 
-Then edit the copy to fit your workflow (PARA, tagging, sibling folders, Dataview, ... whatever you like). No re-link step needed - the vault dir is already symlinked into the repo.
+Then edit the copy to fit your workflow (PARA, tagging, sibling folders, Dataview, ... whatever you like). The Stop hook auto-pushes it to `<vault>/persona/.claude/skills/kb-impl/` after each session.

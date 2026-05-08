@@ -10,8 +10,9 @@ A minimum-viable implementation of the `/kb` interface. Stores everything as Mar
 Use this as a starting template:
 
 ```bash
-cp -r <repo>/share/skills/kb/examples/minimal <vault>/persona/.claude/skills/kb-impl
-# now edit <vault>/persona/.claude/skills/kb-impl/SKILL.md to customize
+cp -r <repo>/.claude/skills/kb/examples/minimal <repo>/.claude/skills/kb-impl
+# now edit .claude/skills/kb-impl/SKILL.md to customize
+# (Stop hook auto-pushes it to <vault>/persona/.claude/skills/kb-impl/)
 ```
 
 ## Layout
@@ -69,4 +70,4 @@ This minimal impl does NOT implement `/kb ingest`, `/kb plan`, `/kb clip`, etc. 
 - **Add Dataview hubs**: aggregate same-type articles via frontmatter `type:` fields.
 - **Add `clip`**: shell out to `yt-dlp --skip-download --write-info-json --write-auto-sub` to clip videos into raw/.
 
-See the maintainer's full implementation in `<vault>/persona/.claude/skills/kb-impl/` for one fleshed-out example (PARA + folder-note + Dataview + `assets/` subfolder).
+See the maintainer's full implementation in `.claude/skills/kb-impl/` (gitignored, backed up to `<vault>/persona/.claude/skills/kb-impl/`) for one fleshed-out example (PARA + folder-note + Dataview + `assets/` subfolder).
