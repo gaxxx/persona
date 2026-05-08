@@ -134,22 +134,14 @@ adopt_existing() {
   fi
 }
 
-# Spawn daemons under a PTY (`script`) — claude-code 2.1.133 + Haiku 4.5 in
-# stream-json mode misbehaves when launched with no TTY in the process tree
-# (each turn ends with claude exiting → tg-daemon auto-respawns → respawn
-# churn). `script` allocates a pseudoterminal so claude sees a TTY parent.
-# Sonnet/Opus don't need this but it's harmless. `setsid` detaches from any
-# controlling terminal so the wrapper survives when watchdog isn't on a tty.
 start_tg_daemon() {
-  setsid script -qc "bun run bin/tg-daemon.ts" /tmp/tg-daemon-pty.log \
-    < /dev/null > /tmp/tg-daemon-stderr.log 2>&1 &
+  nohup bun run bin/tg-daemon.ts > /tmp/tg-daemon-stderr.log 2>&1 &
   echo $! > "$TG_PIDFILE"
   disown
 }
 
 start_cron_daemon() {
-  setsid script -qc "bun run bin/cron-daemon.ts" /tmp/cron-daemon-pty.log \
-    < /dev/null > /tmp/cron-daemon-stderr.log 2>&1 &
+  nohup bun run bin/cron-daemon.ts > /tmp/cron-daemon-stderr.log 2>&1 &
   echo $! > "$CRON_PIDFILE"
   disown
 }
