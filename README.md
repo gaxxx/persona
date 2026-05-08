@@ -41,7 +41,7 @@ docker compose up -d --build                          # build + run; auto-starts
 docker compose exec persona tmux attach -t loop       # attach to the live loop (Ctrl-B D to detach)
 ```
 
-The container's `CMD` runs `claude --dangerously-skip-permissions /assistant-loop` inside a tmux session named `loop`, which boots tg-daemon + cron-daemon and spawns the bash watchdog to keep them alive. Auth carries over from the host's `~/.claude` (mount); if you've never logged in, run `claude /login` on the host once first.
+The container's `CMD` runs `claude --dangerously-skip-permissions /assistant-loop` inside a tmux session named `loop`, which boots tg-daemon + cron-daemon and spawns the bash watchdog to keep them alive. Auth lives inside the container — run `docker compose exec persona claude /login` once after first build.
 
 Common ops:
 

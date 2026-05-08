@@ -100,15 +100,15 @@ A minimal flat-folder example implementation ships at `.claude/skills/kb/example
 
 ## Authenticating Claude Code
 
-The compose file mounts `~/.claude` from the host so a Claude Code subscription session carries through. If you've never logged in, do it on the **host** before `docker compose up`:
+Claude Code auth lives inside the container (no host `~/.claude` mount — auth is per-container). After `docker compose up`, attach once and log in:
 
 ```bash
-claude /login                               # on the host - writes ~/.claude/.credentials.json
+docker compose exec persona claude /login   # writes container's ~/.claude/.credentials.json
 ```
 
-Then `docker compose up -d --build` will pick up the credentials via the mount and the auto-run `claude /assistant-loop` will boot cleanly.
+Credentials persist as long as the container's filesystem layer survives. `docker compose down -v` or rebuilding the image wipes them; just re-run `/login` after.
 
-Don't open a second `claude` session inside the running container (`docker compose exec persona claude`) for routine work — it shares `~/.claude/.credentials.json` with the main loop and one stray `/logout` will deauth both. For ad-hoc shell work, use `docker compose exec persona bash`.
+For routine ad-hoc shell work inside the running container, use `docker compose exec persona bash` — opening a second `claude` session shares the credentials with the main loop and one stray `/logout` will deauth both.
 
 ## First Telegram message
 
@@ -179,5 +179,5 @@ docker compose exec persona bash                   # ad-hoc shell (don't open an
 - **Cron tasks don't fire on time** - check `data/cron-daemon.log`. Common cause: laptop slept past the scheduled minute. cron-daemon will fire on the next match after wake; sleep is a hard limit.
 - **Cron tasks rejected with "TELEGRAM_CHAT_ID not set"** - bin scripts enforce a chat allowlist; ensure `.env` has `TELEGRAM_CHAT_ID=<your-id>` (or `TELEGRAM_CHAT_IDS=id1,id2` for multi-user).
 - **Vault writes don't show up in Obsidian** - Google Drive bind-mounts on macOS sometimes lag a few seconds. Force-sync the Drive client or wait.
-- **MCP OAuth errors** - claude.ai connectors (Gmail, Calendar, Notion) re-auth via `~/.claude/`. Run `claude` interactively to refresh the session.
+- **MCP OAuth errors** - claude.ai connectors (Gmail, Calendar, Notion) re-auth via the container's `~/.claude/`. Run `docker compose exec persona claude` interactively to refresh the session.
 - **`/kb <subcmd>` says "implementation not installed"** - run `cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/persona/.claude/skills/kb-impl"`, then `bash bin/pstore.sh` to mirror it back into the repo.

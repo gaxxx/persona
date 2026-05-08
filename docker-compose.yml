@@ -2,21 +2,22 @@ services:
   persona:
     build: .
     container_name: persona
-    env_file: .env
+    # No env_file: — Compose auto-reads `.env` from cwd for ${VAR} substitution
+    # below. If .env is missing, all defaults below kick in. Daemons will
+    # fail loudly at runtime if TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are empty.
     environment:
       - TZ=${TZ:-America/New_York}
-      # Override the host-side VAULT_PATH that env_file pulls in.
-      # On the host, VAULT_PATH points at the bind-mount source
-      # (e.g. /volume1/...); inside the container, the vault is
-      # always at /vault. Don't remove this line.
+      # Inside the container, the vault is always at /vault — the host path
+      # below (${VAULT_PATH:-./Obsidian}) is the bind-mount source.
       - VAULT_PATH=/vault
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - TELEGRAM_CHAT_IDS=${TELEGRAM_CHAT_IDS:-}
     volumes:
       # Repo (read-write - assistant edits CLAUDE.md, conversations log, etc.)
       - .:/workspace
-      # Obsidian vault - substitute <vault> wherever it appears in skills
-      - ${VAULT_PATH}:/vault
-      # Claude Code auth (carries claude.ai subscription session from host)
-      - ${HOME}/.claude:/home/bun/.claude
+      # Obsidian vault - default ./Obsidian if .env is missing or VAULT_PATH unset
+      - ${VAULT_PATH:-./Obsidian}:/vault
       # Persistent npm cache (gmail MCP via npx - auth state under here)
       - persona-npm:/home/bun/.npm
     stdin_open: true
