@@ -21,11 +21,11 @@ ENV PATH="/home/bun/.local/bin:${PATH}"
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
 WORKDIR /workspace
-# Auto-start the assistant loop on `docker compose up`, wrapped in tmux
-# so you can attach without taking over PID 1's stdin. To peek:
+# Auto-start: bin/entrypoint.sh spawns the watchdog (which supervises the
+# tg/cron daemons), then execs tmux + claude /assistant-loop.
+# To attach to the interactive REPL:
 #   docker compose exec persona tmux attach -t loop
-# Detach with Ctrl-B D — the loop keeps running. tmux server is PID 1;
-# `-A -s loop` reuses the session if it exists. Don't open a second
-# `claude` for ad-hoc work; exec a `bash` instead (avoids credential
-# races with the main loop).
-CMD ["tmux", "new-session", "-A", "-s", "loop", "claude --dangerously-skip-permissions /assistant-loop"]
+# Detach with Ctrl-B D — the loop keeps running. Don't open a second
+# `claude` for ad-hoc work; `docker compose exec persona bash` instead
+# (avoids credential races with the main loop).
+CMD ["bash", "/workspace/bin/entrypoint.sh"]
