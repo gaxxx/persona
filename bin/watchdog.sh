@@ -172,7 +172,10 @@ start_cron_daemon() {
 is_heartbeat_fresh() {
   [ -f "$TG_HEARTBEAT" ] || return 1
   local mtime now age
-  mtime=$(stat -c %Y "$TG_HEARTBEAT" 2>/dev/null) || return 1
+  # GNU coreutils (Linux/Docker) uses `-c %Y`; BSD stat (macOS) uses `-f %m`.
+  # Try GNU first, fall back to BSD. Both print just the epoch seconds.
+  mtime=$(stat -c %Y "$TG_HEARTBEAT" 2>/dev/null || stat -f %m "$TG_HEARTBEAT" 2>/dev/null)
+  [ -n "$mtime" ] || return 1
   now=$(date +%s)
   age=$(( now - mtime ))
   [ "$age" -le "$HEARTBEAT_MAX_AGE" ]
