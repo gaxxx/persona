@@ -59,18 +59,44 @@ The daemon **only** owns Telegram. It does NOT start a Monitor, does NOT call `b
 
 This skill runs once per invocation. No `ScheduleWakeup`, no heartbeat.
 
-1. **Tag this session as `loop` in the registry** — `bun run bin/register-session.ts loop`. Idempotent; enables `/stats` to bucket billing accurately.
+### 0. Preflight — abort before spawning anything if config is incomplete
 
-2. **Verify the watchdog is alive** — `pgrep -f bin/watchdog.sh`. If not running, spawn it (it'll come up and immediately catch any dead daemons):
-   ```bash
-   nohup bash bin/watchdog.sh > /tmp/watchdog.log 2>&1 & disown
-   ```
+The watchdog will tight-loop respawning daemons that crash on missing env, so refuse to start the loop unless config is actually present. One bash:
 
-3. **Quick daemon status** — pgrep tg-daemon and cron-daemon. If either is dead, the watchdog will catch them within 60s; for instant feedback you can run `bash bin/watchdog.sh --once` to do a single check now.
+```bash
+{ [ -f .env ] || { echo "✗ no .env — run ./setup.sh first"; exit 1; }; set -a; . ./.env; set +a; \
+  [ -n "${TELEGRAM_BOT_TOKEN:-}" ] || { echo "✗ TELEGRAM_BOT_TOKEN unset in .env"; exit 1; }; \
+  [ -n "${TELEGRAM_CHAT_ID:-}${TELEGRAM_CHAT_IDS:-}" ] || { echo "✗ TELEGRAM_CHAT_ID(S) unset in .env"; exit 1; }; \
+  [ -d "${VAULT_PATH:-}/persona" ] || { echo "✗ VAULT_PATH=${VAULT_PATH:-(unset)} has no persona/ dir — run ./setup.sh"; exit 1; }; \
+  echo "preflight ✓"; }
+```
 
-4. **Re-arm pending reminders** — read `<vault>/persona/tasks.md` for incomplete tasks with dates ≤ today. Send overdue ones immediately via Telegram with a note. (Future-dated tasks are handled by the `upcoming-1h-preview` cron task, no need to re-arm.)
+If any check fails: **report the specific failure to the user, tell them to run `./setup.sh` from the repo root, and stop**. Do NOT spawn the watchdog, daemons, or session registration. A crash-looping watchdog spamming Telegram alerts is much worse than a clean abort.
 
-5. **Report status to the REPL user** in 1–3 lines (e.g., "✓ watchdog up, both daemons healthy, 2 overdue tasks pinged"). Done — no scheduled wake-up.
+If preflight passes, proceed to step 1.
+
+### 1. Tag this session as `loop` in the registry
+
+`bun run bin/register-session.ts loop`. Idempotent; enables `/stats` to bucket billing accurately.
+
+### 2. Verify the watchdog is alive
+
+`pgrep -f bin/watchdog.sh`. If not running, spawn it (it'll come up and immediately catch any dead daemons):
+```bash
+nohup bash bin/watchdog.sh > /tmp/watchdog.log 2>&1 & disown
+```
+
+### 3. Quick daemon status
+
+pgrep tg-daemon and cron-daemon. If either is dead, the watchdog will catch them within 60s; for instant feedback you can run `bash bin/watchdog.sh --once` to do a single check now.
+
+### 4. Re-arm pending reminders
+
+Read `<vault>/persona/tasks.md` for incomplete tasks with dates ≤ today. Send overdue ones immediately via Telegram with a note. (Future-dated tasks are handled by the `upcoming-1h-preview` cron task, no need to re-arm.)
+
+### 5. Report status to the REPL user
+
+In 1–3 lines (e.g., "✓ watchdog up, both daemons healthy, 2 overdue tasks pinged"). Done — no scheduled wake-up.
 
 The main REPL does **not** poll Telegram (tg-daemon owns that), does **not** schedule cron tasks (cron-daemon owns that), and does **not** supervise daemons in a loop (watchdog owns that).
 

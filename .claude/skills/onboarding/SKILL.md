@@ -10,7 +10,7 @@ Fill in the persona's two profile files via natural Telegram conversation:
 - `<vault>/persona/USER.md` — about the human
 - `<vault>/persona/IDENTITY.md` — about you (the assistant)
 
-This is the bridge between `/setup` (CLI bootstrap, run once on a fresh checkout) and a fully-personalized assistant. `/setup` only collects what's needed to make Telegram work; everything else lives here.
+This is the bridge between `./setup.sh` (CLI bootstrap, run once on a fresh checkout) and a fully-personalized assistant. `./setup.sh` only collects what's needed to make Telegram work; everything else lives here.
 
 ## When to trigger
 
@@ -34,7 +34,7 @@ Identify which fields are "not set" or empty. If everything is filled → tell t
 
 ### 2. Read language(s) from USER.md
 
-`USER.md` Language field is a comma-separated list set by `/setup` step 0 — the **first entry is primary**, the rest are also-spoken. Examples: `中文`, `English`, `中文, English`.
+`USER.md` Language field is a comma-separated list set by `./setup.sh` — the **first entry is primary**, the rest are also-spoken. Examples: `中文`, `English`, `中文, English`.
 
 For onboarding prompts: use the primary unless the user's incoming message is in another language from the list (then match that message's language). Per the rule in CLAUDE.md, autonomous outputs (cron etc.) use primary; replies match the user's message language.
 

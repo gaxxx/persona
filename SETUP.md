@@ -24,14 +24,14 @@ Skills are split into two layers:
 
 ## One-time setup
 
-The fastest path is the `/setup` skill, which wraps every step below into one interactive flow:
+The fastest path is `./setup.sh`, which wraps every step below into one interactive flow:
 
 ```bash
 git clone <repo-url> persona && cd persona
-claude                # then type:  /setup
+./setup.sh
 ```
 
-`/setup` validates your Telegram token (calls `getMe`), sends a test message to your `chat_id`, writes `.env`, copies `CLAUDE.md` and `STRUCTURE.md` from examples, provisions `<vault>/persona/`, and offers the minimal `kb-impl` starter. Idempotent - safe to re-run when you switch vaults or rotate tokens.
+`setup.sh` picks your language, validates your Telegram token (calls `getMe`), sends a test message to your `chat_id`, writes `.env`, copies `CLAUDE.md` and `STRUCTURE.md` from examples, provisions `<vault>/persona/`, offers the minimal `kb-impl` starter, and asks whether to deploy via Docker or natively. Idempotent — safe to re-run when you switch vaults or rotate tokens.
 
 If you'd rather do it by hand, the same steps:
 
@@ -83,7 +83,7 @@ docker compose exec persona tmux attach -t loop   # attach (Ctrl-B D to detach)
 | Personal skills (repo, gitignored) | `.claude/skills/<name>/` | `kb-impl`, plus anything you write | no |
 | Personal skills (vault backup) | `<vault>/persona/.claude/skills/<name>/` | mirror of above | yes (vault is yours) |
 
-`/setup` ships as a tracked slash command at `.claude/commands/setup.md`, so it works the moment you `git clone`. Shared skills are committed directly into `.claude/skills/` (per `.gitignore` exception list) and need no install step. Personal skills + `CLAUDE.md` (+ optional `CLAUDE.local.md`) are gitignored real files synced with the vault via `bin/pbackup.sh` / `bin/pstore.sh`:
+`setup.sh` lives at the repo root, so it works the moment you `git clone`. Shared skills are committed directly into `.claude/skills/` (per `.gitignore` exception list) and need no install step. Personal skills + `CLAUDE.md` (+ optional `CLAUDE.local.md`) are gitignored real files synced with the vault via `bin/pbackup.sh` / `bin/pstore.sh`:
 
 - **`pstore`** copies `<vault>/persona/CLAUDE.md` and personal-skill dirs INTO the repo. Run after a fresh clone or when restoring local state.
 - **`pbackup`** copies the same files OUT of the repo into the vault. A `Stop` hook in `.claude/settings.local.json` runs this automatically after every Claude Code session.
@@ -137,7 +137,7 @@ repo/
 │   ├── pbackup.sh / pstore.sh  # sync personal files (CLAUDE.md + personal skills) with vault
 │   └── ...
 ├── .claude/
-│   ├── commands/setup.md       # tracked - /setup slash command
+│   ├── commands/                # tracked Claude Code slash commands (if any)
 │   ├── settings.local.json     # personal hooks/permissions (gitignored)
 │   └── skills/
 │       ├── assistant-loop/     # tracked (per .gitignore exceptions)

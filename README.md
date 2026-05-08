@@ -21,7 +21,6 @@ Three independent processes talk to a shared filesystem and persona config:
 - The interactive REPL you `claude` into - ad-hoc work and on-demand status checks via `/assistant-loop`.
 
 Skills:
-- `/setup` is a tracked slash command at `.claude/commands/setup.md`, so it works the moment you `git clone`.
 - The shipped skills (`assistant-loop`, `assistant-test`, `kb` interface stub, `onboarding`) are committed directly under `.claude/skills/` per `.gitignore` exception list. Edit them freely; pull upstream updates with `git pull`.
 - Personal skills you author live as gitignored real directories under `.claude/skills/<name>/`. They're mirrored to `<vault>/persona/.claude/skills/` via `bin/pbackup.sh` (auto-runs on every Claude Code Stop hook) and pulled back via `bin/pstore.sh`.
 
@@ -29,16 +28,16 @@ Skills:
 
 ```bash
 git clone <repo-url> persona && cd persona
-claude                # then type:  /setup
+./setup.sh
 ```
 
-`/setup` is an interactive wizard - it picks your language, walks through `.env`, validates your Telegram bot token, sends a test message to your chat_id, provisions the vault skeleton (default `./Obsidian` sibling folder), copies `STRUCTURE.md` + `CLAUDE.md` + persona skeletons, and offers the starter `kb-impl`. Idempotent; safe to re-run.
+`setup.sh` is an interactive bash wizard — it picks your language, walks through `.env`, validates your Telegram bot token, sends a test message to your chat_id, provisions the vault skeleton (default `./Obsidian` sibling folder), copies `STRUCTURE.md` + `CLAUDE.md` + persona skeletons, offers the starter `kb-impl`, and asks whether to run via Docker or natively. Idempotent; safe to re-run.
 
-After `/setup` finishes:
+If you picked Docker, `setup.sh` runs `docker compose up -d --build` for you. Then attach once:
 
 ```bash
-docker compose up -d --build                          # build + run; auto-starts /assistant-loop in tmux
-docker compose exec persona tmux attach -t loop       # attach to the live loop (Ctrl-B D to detach)
+docker compose exec persona claude /login            # one-time auth
+docker compose exec persona tmux attach -t loop      # attach to the live loop (Ctrl-B D to detach)
 ```
 
 The container's `CMD` runs `claude --dangerously-skip-permissions /assistant-loop` inside a tmux session named `loop`, which boots tg-daemon + cron-daemon and spawns the bash watchdog to keep them alive. Auth lives inside the container — run `docker compose exec persona claude /login` once after first build.
