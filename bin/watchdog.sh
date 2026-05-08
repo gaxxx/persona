@@ -25,6 +25,14 @@ set -u
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Auto-load .env on host installs so daemons we spawn (and our own
+# CHAT_ID lookup below) see the right vars regardless of how we were
+# started. Skip in Docker — compose's env_file already loaded everything,
+# and host .env would clobber the in-container VAULT_PATH=/vault.
+if [ ! -f /.dockerenv ] && [ -f .env ]; then
+  set -a; . ./.env; set +a
+fi
+
 # Self-wrap with a pseudoterminal if our session has no controlling TTY.
 # claude-code 2.1.133 + Haiku 4.5 in stream-json mode exits per turn when the
 # inner claude's session has no controlling TTY. Daemons spawned by this
