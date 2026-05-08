@@ -64,10 +64,12 @@ This skill runs once per invocation. No `ScheduleWakeup`, no heartbeat.
 The watchdog will tight-loop respawning daemons that crash on missing env, so refuse to start the loop unless config is actually present. One bash:
 
 ```bash
-{ [ -f .env ] || { echo "✗ no .env — run ./setup.sh first"; exit 1; }; set -a; . ./.env; set +a; \
-  [ -n "${TELEGRAM_BOT_TOKEN:-}" ] || { echo "✗ TELEGRAM_BOT_TOKEN unset in .env"; exit 1; }; \
-  [ -n "${TELEGRAM_CHAT_ID:-}${TELEGRAM_CHAT_IDS:-}" ] || { echo "✗ TELEGRAM_CHAT_ID(S) unset in .env"; exit 1; }; \
-  [ -d "${VAULT_PATH:-}/persona" ] || { echo "✗ VAULT_PATH=${VAULT_PATH:-(unset)} has no persona/ dir — run ./setup.sh"; exit 1; }; \
+{ # Trust the env (docker-compose injects vars; host users `source .env` or
+  # use a launcher that does). Don't source .env here — it would clobber
+  # docker's VAULT_PATH=/vault with the host path.
+  [ -n "${TELEGRAM_BOT_TOKEN:-}" ] || { echo "✗ TELEGRAM_BOT_TOKEN unset — source .env or run ./setup.sh"; exit 1; }
+  [ -n "${TELEGRAM_CHAT_ID:-}${TELEGRAM_CHAT_IDS:-}" ] || { echo "✗ TELEGRAM_CHAT_ID(S) unset"; exit 1; }
+  [ -d "${VAULT_PATH:-}/persona" ] || { echo "✗ VAULT_PATH=${VAULT_PATH:-(unset)}/persona missing — source .env or run ./setup.sh"; exit 1; }
   echo "preflight ✓"; }
 ```
 

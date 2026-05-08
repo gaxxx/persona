@@ -84,6 +84,28 @@ mkdir -p "$vault_in"
 VAULT_PATH=$(cd "$vault_in" && pwd)
 echo "  ✓ vault: $VAULT_PATH"
 
+# ============ timezone ============
+echo
+detect_tz() {
+  if [ -r /etc/timezone ]; then
+    tr -d '[:space:]' < /etc/timezone
+  elif [ -L /etc/localtime ]; then
+    readlink /etc/localtime | sed -E 's|.*/zoneinfo/||'
+  fi
+}
+detected_tz=$(detect_tz)
+default_tz="${TZ:-${detected_tz:-America/New_York}}"
+say "→ 时区（用于 cron 调度，IANA 格式）" "→ Timezone (for cron scheduling, IANA name)"
+while true; do
+  read -rp "$(t "时区" "Timezone") [$default_tz]: " tz_in
+  TZ="${tz_in:-$default_tz}"
+  if [ -f "/usr/share/zoneinfo/$TZ" ]; then
+    echo "  ✓ TZ: $TZ"
+    break
+  fi
+  echo "  ✗ $(t "未知时区，请用 IANA 格式（例: Asia/Shanghai, Europe/London, America/Los_Angeles）" "unknown TZ — use IANA format (e.g., Asia/Shanghai, Europe/London, America/Los_Angeles)")"
+done
+
 # ============ write .env ============
 echo
 say "→ 写入 .env" "→ Writing .env"
@@ -103,6 +125,7 @@ set_kv() {  # set_kv KEY VALUE  (portable in-place edit via temp file)
 set_kv TELEGRAM_BOT_TOKEN "$TELEGRAM_BOT_TOKEN"
 set_kv TELEGRAM_CHAT_ID   "$TELEGRAM_CHAT_ID"
 set_kv VAULT_PATH         "\"$VAULT_PATH\""
+set_kv TZ                 "$TZ"
 echo "  ✓ .env"
 
 # ============ vault skeleton + persona files ============
