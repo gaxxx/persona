@@ -100,13 +100,13 @@ A minimal flat-folder example implementation ships at `.claude/skills/kb/example
 
 ## Authenticating Claude Code
 
-Claude Code auth lives inside the container (no host `~/.claude` mount — auth is per-container). After `docker compose up`, attach once and log in:
+Claude Code auth lives inside the container (no host `~/.claude` mount — auth is per-container). The container's `CMD` runs `claude /assistant-loop` inside a tmux session named `loop`; on first boot, Claude Code shows its login prompt there and waits. Attach to finish login:
 
 ```bash
-docker compose exec persona claude /login   # writes container's ~/.claude/.credentials.json
+docker compose exec persona tmux a -t loop   # Ctrl-B D to detach
 ```
 
-Credentials persist as long as the container's filesystem layer survives. `docker compose down -v` or rebuilding the image wipes them; just re-run `/login` after.
+Once logged in, the same session proceeds into `/assistant-loop` automatically. Credentials persist as long as the container's filesystem layer survives. `docker compose down -v` or rebuilding the image wipes them; re-attach to log in again.
 
 For routine ad-hoc shell work inside the running container, use `docker compose exec persona bash` — opening a second `claude` session shares the credentials with the main loop and one stray `/logout` will deauth both.
 

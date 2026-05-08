@@ -33,11 +33,10 @@ git clone <repo-url> persona && cd persona
 
 `setup.sh` is an interactive bash wizard — it picks your language, walks through `.env`, validates your Telegram bot token, sends a test message to your chat_id, provisions the vault skeleton (default `./Obsidian` sibling folder), copies `STRUCTURE.md` + `CLAUDE.md` + persona skeletons, offers the starter `kb-impl`, and asks whether to run via Docker or natively. Idempotent; safe to re-run.
 
-If you picked Docker, `setup.sh` runs `docker compose up -d --build` for you. Then attach once:
+If you picked Docker, `setup.sh` runs `docker compose up -d --build` for you. Then attach to the in-container tmux session — first time you'll see Claude Code's login prompt; once logged in it proceeds straight into `/assistant-loop`:
 
 ```bash
-docker compose exec persona claude /login            # one-time auth
-docker compose exec persona tmux attach -t loop      # attach to the live loop (Ctrl-B D to detach)
+docker compose exec persona tmux a -t loop          # Ctrl-B D to detach
 ```
 
 The container's `CMD` runs `claude --dangerously-skip-permissions /assistant-loop` inside a tmux session named `loop`, which boots tg-daemon + cron-daemon and spawns the bash watchdog to keep them alive. Auth lives inside the container — run `docker compose exec persona claude /login` once after first build.

@@ -128,18 +128,66 @@ fi
 # Repo-root CLAUDE.md (gitignored real file, synced via pbackup/pstore)
 [ -f CLAUDE.md ] || cp CLAUDE.example.md CLAUDE.md
 
-# Optional kb-impl starter
+# kb-impl: simple starter now, or roll your own later
 if [ ! -d "$VAULT_PATH/persona/.claude/skills/kb-impl" ] && [ ! -d ".claude/skills/kb-impl" ]; then
-  read -rp "$(t "复制 minimal kb-impl 模板？" "Copy minimal kb-impl starter?") [Y/n]: " kb_yn
-  if [ "${kb_yn:-Y}" != "n" ] && [ "${kb_yn:-Y}" != "N" ]; then
-    cp -r .claude/skills/kb/examples/minimal .claude/skills/kb-impl
-    echo "  ✓ kb-impl"
-  fi
+  echo
+  say "→ kb-impl（Knowledge Base 实现）" "→ kb-impl (knowledge-base implementation)"
+  echo "  1) $(t "用简单版（minimal flat-folder 模板，可直接用）" "Use simple version (minimal flat-folder template, ready to go)")"
+  echo "  2) $(t "跳过，之后自己写" "Skip — I'll write my own later")"
+  while true; do
+    read -rp "$(t "选择" "Choose") (1/2) [1]: " kb_choice
+    case "${kb_choice:-1}" in
+      1) cp -r .claude/skills/kb/examples/minimal .claude/skills/kb-impl
+         echo "  ✓ $(t "已复制 minimal kb-impl" "minimal kb-impl copied")"; break ;;
+      2) echo "  · $(t "稍后自己加 .claude/skills/kb-impl/" "add .claude/skills/kb-impl/ later yourself")"; break ;;
+      *) echo "  ? 1 or 2";;
+    esac
+  done
 fi
 
 # Pull any existing personal skills / CLAUDE.md from vault into repo
 bash bin/pstore.sh > /dev/null 2>&1 || true
 echo "  ✓ $(t "vault 完成" "vault ready")"
+
+# ============ Claude Code model ============
+echo
+say "→ Claude Code 模型" "→ Claude Code model"
+echo "  1) Sonnet $(t "（推荐 — 速度/成本/能力平衡）" "(recommended — balanced speed/cost/capability)")"
+echo "  2) Opus $(t "（最强但最贵）" "(most capable, most expensive)")"
+echo "  3) Haiku $(t "（最快最便宜，能力较弱）" "(fastest/cheapest, less capable)")"
+echo "  4) $(t "默认（Claude Code 自己决定）" "Default (let Claude Code decide)")"
+while true; do
+  read -rp "$(t "选择" "Choose") (1-4) [1]: " m_choice
+  case "${m_choice:-1}" in
+    1) CC_MODEL="sonnet"; break ;;
+    2) CC_MODEL="opus";   break ;;
+    3) CC_MODEL="haiku";  break ;;
+    4) CC_MODEL="";       break ;;
+    *) echo "  ? 1-4";;
+  esac
+done
+
+# Write model to .claude/settings.local.json
+if [ -n "$CC_MODEL" ]; then
+  mkdir -p .claude
+  if [ -f .claude/settings.local.json ]; then
+    if command -v jq >/dev/null 2>&1; then
+      tmp=$(mktemp)
+      jq --arg m "$CC_MODEL" '.model = $m' .claude/settings.local.json > "$tmp" && mv "$tmp" .claude/settings.local.json
+      echo "  ✓ model = $CC_MODEL ($(t "写入 .claude/settings.local.json" "written to .claude/settings.local.json"))"
+    else
+      say "  ! jq 没装，请手动在 .claude/settings.local.json 加: \"model\": \"$CC_MODEL\"" \
+          "  ! jq not installed; manually add \"model\": \"$CC_MODEL\" to .claude/settings.local.json"
+    fi
+  else
+    cat > .claude/settings.local.json <<EOF
+{
+  "model": "$CC_MODEL"
+}
+EOF
+    echo "  ✓ model = $CC_MODEL ($(t "已写入 .claude/settings.local.json" "written to .claude/settings.local.json"))"
+  fi
+fi
 
 # ============ deployment mode ============
 echo
@@ -165,8 +213,11 @@ if [ "$MODE" = "docker" ]; then
   docker compose up -d --build
   echo
   say "✓ 容器已启动 — 下一步：" "✓ container running — next steps:"
-  echo "    docker compose exec persona claude /login"
-  say "      （登录 Claude Code，container 里只需做一次）" "      (login to Claude Code; one-time inside the container)"
+  echo "    docker compose exec persona tmux a -t loop"
+  say "      （attach 到容器内的 tmux session — 首次会显示 Claude Code 登录提示，登完就自动进 /assistant-loop）" \
+      "      (attach to the in-container tmux session — first time you'll see Claude Code's login prompt; once logged in it proceeds into /assistant-loop)"
+  say "      退出 tmux：Ctrl-B 然后按 D（detach，保持容器运行）" \
+      "      Detach from tmux without killing it: Ctrl-B then D"
   say "    然后给你的 Telegram bot 发一条消息触发 onboarding" "    Then send your Telegram bot a message to trigger onboarding"
 else
   echo
