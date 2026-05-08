@@ -48,6 +48,24 @@ HEARTBEAT_MAX_AGE="${HEARTBEAT_MAX_AGE:-180}"
 
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] watchdog: $*" >&2; }
 
+# Sweep orphan daemons before we own the lifecycle. Without this, a previous
+# watchdog's daemons can survive as PPID=1 orphans (e.g., if old watchdog was
+# pkilled but daemons stayed up via nohup+disown). This watchdog would then
+# spawn duplicates that fight over Telegram getUpdates.
+sweep_orphans() {
+  local killed=0
+  for script in bin/tg-daemon.ts bin/cron-daemon.ts; do
+    while read -r pid; do
+      [ -z "$pid" ] && continue
+      log "sweeping orphan $script (pid=$pid)"
+      kill "$pid" 2>/dev/null || true
+      killed=1
+    done < <(ps -eo pid=,args= | awk -v s="$script" '$0 ~ ("[b]un run " s) {print $1}')
+  done
+  [ "$killed" = 1 ] && sleep 1 || true
+}
+sweep_orphans
+
 notify() {
   local msg="$1"
   log "$msg"
