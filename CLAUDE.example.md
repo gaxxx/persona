@@ -18,6 +18,10 @@ If `USER.md` has "not set" fields -> run onboarding on the next Telegram message
 Read `<vault>/persona/MEMORY.md` - things the user explicitly asked you to remember.
 If MEMORY.md exceeds 10K characters, notify the user via Telegram to review and archive old entries.
 
+## Path Convention
+
+All `bin/...`, `data/...`, and other relative paths in skills, hooks, and prompts are **relative to the repo root** (the cwd Claude Code runs in — `/workspace` in Docker, or wherever you `cd`'d for native host). They are **not** under `.claude/skills/<name>/`. If `pwd` doesn't end in the persona repo root, `cd` there first.
+
 ## Telegram Message Handling
 
 When a message arrives, check available skills and MCP tools, decide which one fits, then execute. No match? Answer directly or chat naturally.

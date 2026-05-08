@@ -5,6 +5,8 @@ description: Personal assistant loop. Telegram I/O (tg-daemon), scheduled tasks 
 
 # Assistant Loop
 
+(All `bin/...` paths below are relative to the repo root — see CLAUDE.md "Path Convention".)
+
 The assistant has **three long-running components** plus an optional REPL:
 
 | Component | Scope | Started by |

@@ -232,6 +232,26 @@ if [ "$MODE" = "docker" ]; then
     say "  ✗ Docker 没装；装好再 ./setup.sh 重跑" "  ✗ Docker not installed; install it then re-run ./setup.sh"
     exit 1
   }
+
+  # On Linux hosts, bind mounts use raw UIDs — the container's bun user (UID
+  # 1000) needs to own /workspace and /vault to write logs / persona files.
+  # macOS Docker Desktop's osxfs auto-translates UIDs so no chown needed.
+  if [ "$(uname -s)" = "Linux" ]; then
+    echo
+    say "→ chown 1000 -R . $VAULT_PATH（容器 bun 用户需要写权限）" \
+        "→ chown 1000 -R . $VAULT_PATH (container's bun user needs write access)"
+    if chown -R 1000 . "$VAULT_PATH" 2>/dev/null; then
+      echo "  ✓ chown done"
+    elif command -v sudo >/dev/null 2>&1; then
+      sudo chown -R 1000 . "$VAULT_PATH"
+      echo "  ✓ chown done (with sudo)"
+    else
+      say "  ✗ chown 失败且没 sudo — 手动跑: chown -R 1000 . $VAULT_PATH" \
+          "  ✗ chown failed and no sudo — run manually: chown -R 1000 . $VAULT_PATH"
+      exit 1
+    fi
+  fi
+
   echo
   say "→ Docker 启动中（首次会 build，几分钟）" "→ Starting Docker (first build takes a few minutes)"
   docker compose up -d --build
