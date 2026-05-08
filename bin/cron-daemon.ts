@@ -310,14 +310,20 @@ function loadAndSchedule() {
 log(`cron-daemon starting (root=${ROOT})`);
 loadAndSchedule();
 
+// Watch CRON.md directly. setup.sh ensures it exists; if someone bypassed
+// setup or deleted the file, skip watch and tell them to restart later.
 let reloadDebounce: Timer | undefined;
-watch(CRON_FILE, () => {
-  if (reloadDebounce) clearTimeout(reloadDebounce);
-  reloadDebounce = setTimeout(() => {
-    log("CRON.md changed; reloading");
-    loadAndSchedule();
-  }, 500);
-});
+if (existsSync(CRON_FILE)) {
+  watch(CRON_FILE, () => {
+    if (reloadDebounce) clearTimeout(reloadDebounce);
+    reloadDebounce = setTimeout(() => {
+      log("CRON.md changed; reloading");
+      loadAndSchedule();
+    }, 500);
+  });
+} else {
+  log(`${CRON_FILE} missing — auto-reload disabled. Create it and restart cron-daemon to enable.`);
+}
 
 const stop = (sig: string) => {
   log(`received ${sig}; exiting`);

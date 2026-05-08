@@ -31,8 +31,10 @@ const MAX_EXTERNAL_WRITES_BYTES = 4096;
 
 // Allowlist: only accept messages from these chat IDs. Set TELEGRAM_CHAT_ID
 // (single id) or TELEGRAM_CHAT_IDS (comma-separated). Empty = reject everything.
+// `||` (not `??`) so empty string (set by docker-compose's `${VAR:-}` pattern)
+// falls through to the next option instead of being treated as "set".
 const ALLOWED_CHAT_IDS = new Set(
-  (process.env.TELEGRAM_CHAT_IDS ?? process.env.TELEGRAM_CHAT_ID ?? "")
+  (process.env.TELEGRAM_CHAT_IDS || process.env.TELEGRAM_CHAT_ID || "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)
