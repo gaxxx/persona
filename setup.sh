@@ -75,6 +75,21 @@ while true; do
   echo "  ✗ $(t "发送失败 — 确认 chat_id 正确并已先给 bot 发过消息" "send failed — make sure chat_id is right and you've messaged the bot first")"
 done
 
+# ============ register bot commands ============
+# Idempotent: setMyCommands replaces the full list. Re-runs of setup.sh
+# refresh whatever is currently here. Edit this JSON to change the menu.
+echo
+say "→ 注册 bot 命令菜单" "→ Registering bot command menu"
+resp=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setMyCommands" \
+  -H "Content-Type: application/json" \
+  --data '{"commands":[{"command":"stats","description":"查看 daemon 统计 / today usage"}]}' \
+  || echo '{}')
+if echo "$resp" | grep -q '"ok":true'; then
+  echo "  ✓ /stats"
+else
+  say "  ! 命令注册失败（不影响其它步骤）：$resp" "  ! command registration failed (non-fatal): $resp"
+fi
+
 # ============ VAULT_PATH ============
 echo
 default_vault="${VAULT_PATH:-./Obsidian}"
