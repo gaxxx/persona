@@ -38,6 +38,7 @@ mkdir -p "$PIDDIR"
 TG_PIDFILE="$PIDDIR/tg-daemon.pid"
 CRON_PIDFILE="$PIDDIR/cron-daemon.pid"
 TG_HEARTBEAT="$PIDDIR/tg-daemon-heartbeat"
+WATCHDOG_PIDFILE="$PIDDIR/watchdog.pid"
 # Stuck-loop threshold. tg-daemon stamps the heartbeat at the top of each
 # poll cycle (~25s) AND on every inner-claude stdout event, so any
 # legitimate progress — long multi-tool turn, slow download — keeps it
@@ -47,6 +48,30 @@ TG_HEARTBEAT="$PIDDIR/tg-daemon-heartbeat"
 HEARTBEAT_MAX_AGE="${HEARTBEAT_MAX_AGE:-180}"
 
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] watchdog: $*" >&2; }
+
+# Singleton lock — refuse to start if another watchdog is already alive.
+# Without this, if `--once` mode and the persistent watchdog ever overlap
+# (e.g. /assistant-loop racing with a second invocation, or a startup
+# script that doesn't `pgrep` first), they'd both `sweep_orphans` and
+# kill each other's daemons in a loop.
+acquire_watchdog_lock() {
+  if [ -f "$WATCHDOG_PIDFILE" ]; then
+    local existing
+    existing=$(cat "$WATCHDOG_PIDFILE" 2>/dev/null)
+    if [ -n "$existing" ] && [ "$existing" != "$$" ] && kill -0 "$existing" 2>/dev/null; then
+      if [ -r "/proc/$existing/cmdline" ]; then
+        tr '\0' ' ' < "/proc/$existing/cmdline" | grep -qF "bin/watchdog.sh" \
+          && { log "another watchdog already alive (pid=$existing); exiting"; exit 0; }
+      else
+        # No /proc (macOS); trust the kill -0 result.
+        log "another watchdog already alive (pid=$existing); exiting"
+        exit 0
+      fi
+    fi
+  fi
+  echo $$ > "$WATCHDOG_PIDFILE"
+  trap 'rm -f "$WATCHDOG_PIDFILE"' EXIT
+}
 
 # Sweep orphan daemons before we own the lifecycle. Without this, a previous
 # watchdog's daemons can survive as PPID=1 orphans (e.g., if old watchdog was
@@ -64,7 +89,13 @@ sweep_orphans() {
   done
   [ "$killed" = 1 ] && sleep 1 || true
 }
-sweep_orphans
+
+# Skip the singleton + sweep when running `--once` (which is meant to be
+# called *by* an existing supervisor for a one-shot health check).
+if [ "${1:-}" != "--once" ]; then
+  acquire_watchdog_lock
+  sweep_orphans
+fi
 
 notify() {
   local msg="$1"
