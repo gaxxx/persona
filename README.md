@@ -2,60 +2,94 @@
 
 A personal Telegram-driven assistant powered by Claude Code.
 
-You message a Telegram bot; an LLM with access to your knowledge base, calendar, email, and any custom skills you write replies in your voice and on your terms. Each user runs their own instance with their own bot, vault, and personal skills - no shared backend.
+You message a Telegram bot; an LLM with access to your knowledge base, calendar, email, and any custom skills you write replies in your voice and on your terms. Each user runs their own instance with their own bot, vault, and personal skills — no shared backend.
+
+<!-- screenshot/GIF goes here once recorded -->
+
+## Quickstart
+
+```bash
+git clone https://github.com/gaxxx/persona && cd persona
+./setup.sh                                  # interactive: token, vault, TZ, deploy mode
+docker compose exec persona tmux a -t loop  # if you picked Docker; Ctrl-B D to detach
+```
+
+Then send your Telegram bot a message — first one triggers onboarding.
+
+## Status & scope
+
+This is a **personal scaffold**, not a SaaS product. The repo holds the harness (Telegram I/O, cron, watchdog, skill loader, kb interface stub); your data, identity, and most skills live in your own vault outside git.
+
+That shape is intentional. PRs that fix bugs or improve the shared harness are welcome; PRs that bake one person's workflow into the harness are not — those belong in *your* `kb-impl/` or personal skills. See [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+## Requirements
+
+- **Claude Code** — paid Anthropic plan or API access. The harness drives `claude` as a subprocess; no plan, no bot.
+- **Bun** (`brew install oven-sh/bun/bun`) — or Docker, which bundles it.
+- **A Telegram bot** — `/newbot` to [@BotFather](https://t.me/BotFather); save the token.
+- **An Obsidian vault** — or any folder you'll treat as one. Your data lives here.
 
 ## What it does
 
 - **Chat over Telegram.** Send a text, photo, document, or sticker; the assistant reads it, picks a skill or replies directly, and writes back.
-- **Runs scheduled tasks.** A separate cron daemon reads `CRON.md` and fires prompts on schedule (daily journal, weekly review, mailbox digest, ...).
-- **Talks to your knowledge base.** A pluggable `/kb` skill - you ship your own implementation against a tiny `put` / `query` / `lint` contract.
-- **Composes with MCP.** Gmail, Google Calendar, Drive, and any other MCP server you wire up are just tools the assistant can pick.
+- **Runs scheduled tasks.** A separate cron daemon reads `CRON.md` and fires prompts (or shell scripts) on schedule — daily journal, weekly review, mailbox digest, calendar lookahead, …
+- **Talks to your knowledge base.** A pluggable `/kb` skill with a fixed `put` / `query` / `lint` contract — you ship your own implementation against it.
+- **Composes with MCP.** Gmail, Google Calendar, Drive, Notion, GitHub, and any other MCP server you wire up are just tools the assistant can pick.
 
 ## Architecture
 
 Three independent processes talk to a shared filesystem and persona config:
 
-- `bin/tg-daemon.ts` - long-running Telegram I/O. Owns a persistent `claude -p --input-format stream-json` subprocess that handles every message in the same session.
-- `bin/cron-daemon.ts` - reads `CRON.md`, schedules each task by its cron expression, spawns a one-shot `claude -p` on fire. Auto-reloads on file change.
-- `bin/watchdog.sh` - bash supervisor (no LLM). Polls every 60s, respawns either daemon if dead, and Telegram-alerts on respawn. Spawned by `/assistant-loop` and disowned, so it survives REPL exit.
-- The interactive REPL you `claude` into - ad-hoc work and on-demand status checks via `/assistant-loop`.
+- `bin/tg-daemon.ts` — long-running Telegram I/O. Owns a persistent `claude -p --input-format stream-json` subprocess that handles every message in the same session.
+- `bin/cron-daemon.ts` — reads `CRON.md`, schedules each task by its cron expression, spawns either `claude -p` (for LLM tasks) or `sh -c` (for deterministic scripts) on fire. Auto-reloads on file change.
+- `bin/watchdog.sh` — bash supervisor (no LLM). Polls every 60s, respawns either daemon if dead, Telegram-alerts on respawn. Spawned by `/assistant-loop` and disowned, so it survives REPL exit.
+- The interactive REPL you `claude` into — ad-hoc work and on-demand status checks via `/assistant-loop`.
 
-Skills:
-- The shipped skills (`assistant-loop`, `assistant-test`, `kb` interface stub, `onboarding`) are committed directly under `.claude/skills/` per `.gitignore` exception list. Edit them freely; pull upstream updates with `git pull`.
-- Personal skills you author live as gitignored real directories under `.claude/skills/<name>/`. They're mirrored to `<vault>/persona/.claude/skills/` via `bin/pbackup.sh` (auto-runs on every Claude Code Stop hook) and pulled back via `bin/pstore.sh`.
+## Extension points
 
-## Setup
+The interesting design is the layering. Five places you can extend without forking:
 
-```bash
-git clone <repo-url> persona && cd persona
-./setup.sh
-```
+### 1. `/kb` — interface vs. implementation
 
-`setup.sh` is an interactive bash wizard — it picks your language, walks through `.env`, validates your Telegram bot token, sends a test message to your chat_id, provisions the vault skeleton (default `./Obsidian` sibling folder), copies `STRUCTURE.md` + `CLAUDE.md` + persona skeletons, offers the starter `kb-impl`, and asks whether to run via Docker or natively. Idempotent; safe to re-run.
+`/kb put`, `/kb query`, `/kb lint` are a fixed contract. The on-disk layout (PARA, Logseq, flat folders, tag-only, …) is entirely up to your `kb-impl/` skill in `<vault>/persona/.claude/skills/kb-impl/`. Other skills call `/kb put <file>` and use the returned path — they never compute kb paths themselves. A minimal starter implementation ships at `.claude/skills/kb/examples/minimal/`.
 
-If you picked Docker, `setup.sh` runs `docker compose up -d --build` for you. Then attach to the in-container tmux session — first time you'll see Claude Code's login prompt; once logged in it proceeds straight into `/assistant-loop`:
+### 2. Skills — three layers
 
-```bash
-docker compose exec persona tmux a -t loop          # Ctrl-B D to detach
-```
+| Layer | Where | When to use |
+|---|---|---|
+| **Shared** | `.claude/skills/<name>/` (tracked) | Useful to all users (current set: `assistant-loop`, `assistant-test`, `kb`, `onboarding`). Add via PR. |
+| **Personal** | `.claude/skills/<name>/` (gitignored, mirrored to `<vault>/persona/.claude/skills/`) | Bound to your life: `game-time`, `uscis-check`, perf-review notes, etc. |
+| **kb-impl** | `<vault>/persona/.claude/skills/kb-impl/` | The one skill that implements the `/kb` contract. Replace freely. |
 
-The container's `CMD` runs `claude --dangerously-skip-permissions /assistant-loop` inside a tmux session named `loop`, which boots tg-daemon + cron-daemon and spawns the bash watchdog to keep them alive. Auth lives inside the container — run `docker compose exec persona claude /login` once after first build.
+Personal skills auto-sync between repo and vault via `bin/pbackup.sh` (Stop hook, runs after every Claude Code session) and `bin/pstore.sh` (manual, vault → repo). The vault is source-of-truth; the repo is a working copy. Don't commit personal skills.
 
-Common ops:
+### 3. `CRON.md` — `Prompt:` vs `Shell:`
 
-```bash
-docker compose logs -f persona            # tail tmux's output without attaching
-docker compose exec persona bash          # ad-hoc shell (don't open a second `claude`)
-docker compose restart persona            # restart the loop
-docker compose down                       # stop
-```
+Each task in `<vault>/persona/CRON.md` is either:
 
-See [SETUP.md](./SETUP.md) for the long version.
+- **`Prompt:`** — cron-daemon spawns `claude -p` with the prompt block. Use when LLM judgment matters (classify, summarize, compose).
+- **`Shell:`** — cron-daemon runs `sh -c <command>`. Use for deterministic wrapper scripts (`bun run bin/foo.ts`). Free, fast, debuggable.
+
+Rule of thumb: write a `bin/foo.ts` wrapper for repeated/stateful tasks (gmail-digest, daily-journal) and let it shell out to `claude -p` only for the parts that actually need a model. fs.watch on `CRON.md` reloads tasks within ~500ms — no daemon restart needed.
+
+### 4. MCP servers — `.mcp.json`
+
+Copy `.mcp.example.json` to `.mcp.json` (gitignored) and add your servers. stdio servers spawn locally; HTTP servers connect remote. The assistant picks them automatically based on the active tool list — no code changes needed to plug in a new MCP.
+
+### 5. Personality & identity
+
+`<vault>/persona/IDENTITY.md`, `USER.md`, and the top-level `CLAUDE.md` are the levers for tone, language, quiet hours, memory rules. Onboarding fills the first two; the rest you tweak by hand. CLAUDE.md in particular is gitignored and synced via pbackup/pstore, so each user has their own without forking the repo.
 
 ## Why a separate repo per user
 
 The repo holds the harness; your vault holds you. Personal data (identity, preferences, the knowledge base itself) lives outside the tracked tree, so the same code can be cloned and personalized by anyone without leaking the previous owner's life into git history.
 
+## More
+
+- [SETUP.md](./SETUP.md) — long-form setup walkthrough (manual + Docker + native)
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — scope, bug reports, PRs
+- [LICENSE](./LICENSE) — MIT
+
 ## Acknowledgments
 
-Built with love, and dedicated to my wife - whose patience and care while we renovated our home reminded me what it looks like to build something thoughtfully, one decision at a time.
+Built with love, and dedicated to my wife — whose patience and care while we renovated our home reminded me what it looks like to build something thoughtfully, one decision at a time.

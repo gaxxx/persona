@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "_comment_stdio": "stdio servers spawn a local process. Good for npm-published MCP servers like the Gmail one below.",
+    "gmail": {
+      "command": "npx",
+      "args": ["@gongrzhe/server-gmail-autoauth-mcp"]
+    },
+
+    "_comment_http": "HTTP servers connect to a remote endpoint. Replace url + token with your own. Auth header format depends on the server (Bearer, raw token, etc.).",
+    "example-http": {
+      "type": "http",
+      "url": "https://your-mcp-host.example.com/mcp",
+      "headers": { "Authorization": "Bearer YOUR_TOKEN_HERE" }
+    }
+  }
+}
