@@ -16,6 +16,10 @@ docker compose exec persona tmux a -t loop  # if you picked Docker; Ctrl-B D to 
 
 Then send your Telegram bot a message — first one triggers onboarding.
 
+Get your telegram bot ready and set up in 3 minutes.
+https://github.com/user-attachments/assets/42251ab8-9890-4ce3-a63e-c446d85ac4fb
+
+
 ## Status & scope
 
 This is a **personal scaffold**, not a SaaS product. The repo holds the harness (Telegram I/O, cron, watchdog, skill loader, kb interface stub); your data, identity, and most skills live in your own vault outside git.
