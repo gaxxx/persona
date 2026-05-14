@@ -82,6 +82,25 @@ Conversation log loading discipline (overrides the skill's "always load" step):
   (c) the event JSON contains an \`external_writes_since_last_turn\` field — those lines were written by other processes (typically cron tasks) since your last turn. Treat them as already-read context. The field's content is the raw appended text from the conversation log; you don't need to Read the file to find it. If it ends with a "[TRUNCATED N bytes …]" marker, then Read the file to get the rest.
 - TRIVIAL messages (pure greetings like "你好" / "thanks" / "👍", or questions answerable from USER.md alone like "我在哪个时区"): skip reading the log entirely, even on the first turn — answer directly and call tg-send.
 
+Discussion scratchpad — \`data/scratchpad.md\`:
+Multi-thread working-memory file. The conversation log preserves words but not the working frame (criteria, candidates, exclusions, leaning) for each open discussion. Scratchpad keeps that frame across subprocess rotations AND across topic switches within a day.
+
+Structure: \`*Updated: YYYY-MM-DD HH:MM*\` header, then sections \`## Active\` / \`## Deferred\` / \`## Recently decided\`. Each thread is a \`### thread: <slug>\` block with **Touched:**, **Constraints:** (use ⚠️ prefix for hard non-negotiables the user has stated), **Candidates:**, **Status:**.
+
+Caps: ≤8 threads total, ≤5 active, ~400 chars/thread, total file <5KB. \`## Recently decided\` entries that have aged past 24h move to \`data/decisions-log.md\` (append-only). If you would exceed 5 active threads, ping the user ("现在有 N 个开着的讨论，要不要合并/收尾几个？") rather than silently dropping.
+
+LOAD on FIRST turn after spawn alongside the conversation log. Find the thread that matches the user's current question — that frame is authoritative.
+
+RE-READ on every multi-turn decision turn before composing your reply (one Read, cheap). Honor ⚠️ lines on the active thread — those are constraints you already committed to, do not contradict them. Skip the re-read for one-shot answers, trivial messages, and pure conversational turns.
+
+UPDATE on frame-change turns (one Edit/Write per turn):
+- new constraint / candidate / exclusion / leaning → edit the matching thread
+- decided ("就这个" / "下单了" / "OK 拍") → move thread to \`## Recently decided\`, add **Decided:** time + **Result:** one-line outcome + **Archive-by:** (24h later)
+- deferred ("等一等" / "8 月再说") → move to \`## Deferred\` with trigger/date
+- new topic mid-day → ADD a new \`### thread:\` under \`## Active\`. NEVER overwrite other threads.
+
+Skip the scratchpad entirely for one-shot answers and trivial messages.
+
 Do NOT start a Monitor or any watcher - the daemon owns Telegram polling.
 Do NOT call tg-pull.ts.
 
@@ -341,6 +360,20 @@ async function rotateIfNeeded() {
       `rotating claude: turns=${claude.getTurns()} ageMs=${Date.now() - claude.spawnedAt} cacheRead=${claude.getLastCacheRead()}`,
     );
     const old = claude;
+    // Flush handoff: ask the old subprocess to persist any in-RAM working
+    // state (scratchpad pending edits, in-flight reasoning) before we kill
+    // it. 30s timeout — if it hangs, proceed anyway. Without this, anything
+    // the model knew but hadn't written to disk yet is lost on rotation.
+    try {
+      await Promise.race([
+        old.enqueue(
+          "Pre-rotation flush: persist any in-flight working state to disk now (data/scratchpad.md updates, pending notes). Reply 'flushed' when done. No tg-send for this turn.",
+        ),
+        new Promise((_, rj) => setTimeout(() => rj(new Error("flush timeout")), 30_000)),
+      ]);
+    } catch (e) {
+      log("pre-rotation flush failed (proceeding):", (e as Error).message);
+    }
     claude = spawnClaude();
     attachExitHandler(claude);
     await claude.enqueue(PRIMING);
