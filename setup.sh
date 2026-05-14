@@ -147,12 +147,13 @@ echo "  ✓ .env"
 echo
 say "→ 初始化 vault 骨架" "→ Initializing vault skeleton"
 
-mkdir -p "$VAULT_PATH/persona/.claude/skills" "$VAULT_PATH/raw" "$VAULT_PATH/kb"
+mkdir -p "$VAULT_PATH/persona/.claude/skills" "$VAULT_PATH/persona/memory" "$VAULT_PATH/raw" "$VAULT_PATH/kb"
 
 [ -f "$VAULT_PATH/STRUCTURE.md" ]        || cp STRUCTURE.example.md "$VAULT_PATH/STRUCTURE.md"
 [ -f "$VAULT_PATH/persona/CLAUDE.md" ]   || cp CLAUDE.example.md    "$VAULT_PATH/persona/CLAUDE.md"
 [ -f "$VAULT_PATH/persona/USER.md" ]     || cp USER.example.md      "$VAULT_PATH/persona/USER.md"
 [ -f "$VAULT_PATH/persona/IDENTITY.md" ] || cp IDENTITY.example.md  "$VAULT_PATH/persona/IDENTITY.md"
+[ -f "$VAULT_PATH/persona/MEMORY.md" ]   || cp MEMORY.example.md    "$VAULT_PATH/persona/MEMORY.md"
 [ -f "$VAULT_PATH/persona/CRON.md" ]     || cp CRON.example.md      "$VAULT_PATH/persona/CRON.md"
 
 # Prefill USER.md Language field if it's still "not set"

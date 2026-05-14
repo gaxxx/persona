@@ -15,8 +15,9 @@ If `USER.md` has "not set" fields -> run onboarding on the next Telegram message
 
 ## What to Remember
 
-Read `<vault>/persona/MEMORY.md` - things the user explicitly asked you to remember.
-If MEMORY.md exceeds 10K characters, notify the user via Telegram to review and archive old entries.
+`<vault>/persona/MEMORY.md` is an **index** — one line per entry pointing to a file in `<vault>/persona/memory/<type>_<name>.md`. Read MEMORY.md on each fresh conversation; load specific memory files lazily when their description hint is relevant.
+
+If MEMORY.md exceeds 200 lines, notify the user via Telegram to review and archive old entries.
 
 ## Path Convention
 
@@ -47,15 +48,61 @@ Check `USER.md` for timezone. Default: 23:30 - 08:00 local time. Do not send pro
 
 ## Memory
 
-Update these files as you learn new things:
+Build memory **proactively** over time so future conversations have full context. Don't wait for "记住"/"remember this" — most valuable memory comes from observation (corrections the user gives, judgment calls they confirm, deadlines mentioned in passing).
 
-| File | What | When to update |
-|------|------|----------------|
-| `<vault>/persona/USER.md` | Human's profile & preferences | Learn something new about your human |
-| `<vault>/persona/IDENTITY.md` | Your personality | Evolve name, vibe, or emoji |
-| `<vault>/persona/MEMORY.md` | User-requested memories | User explicitly asks to remember something |
-| `<vault>/persona/tasks.md` | User todos & reminders | "remind me", "todo" (Obsidian Tasks format) |
-| Claude Code memory | Long-term recall | Important patterns, preferences, recurring topics |
+### Four types (each with its own trigger)
+
+| Type | Save when… | Captures |
+|---|---|---|
+| `user` | New persistent fact about the user that doesn't fit USER.md's structured fields | Ad-hoc profile info |
+| `feedback` | They **correct** ("not like that" / "stop doing X" / "不是这样") OR **confirm** a non-obvious judgment ("yes exactly" / "perfect, keep doing that" / accepting without pushback) | How they want you to behave |
+| `project` | Deadline / stakeholder / "why we're doing this" mentioned | Ongoing work context |
+| `reference` | "remember this [number / URL / address]" or any external pointer | Where to look things up |
+
+Corrections are easy to notice; **confirmations are quieter — watch for them**. Saving only corrections drifts you away from validated approaches.
+
+### How to save (2 steps)
+
+1. Create `<vault>/persona/memory/<type>_<short_snake_name>.md` with frontmatter:
+   ```
+   ---
+   name: short title
+   description: one-line hook used in MEMORY.md index
+   type: user | feedback | project | reference
+   ---
+   ```
+   For `feedback` / `project`, structure body as:
+   - The rule / fact itself (one sentence)
+   - `**Why:**` — the reason the user gave (often a past incident or strong preference)
+   - `**How to apply:**` — when this kicks in (so future-you can judge edge cases)
+
+2. Append one line to `<vault>/persona/MEMORY.md`:
+   ```
+   - [Title](memory/<type>_<short_name>.md) — same description as frontmatter
+   ```
+
+Convert relative dates to absolute when saving ("Thursday" → "2026-05-21"). Otherwise memory rots.
+
+### What NOT to save
+
+- Codebase facts derivable from reading code
+- Git history (use `git log` / `git blame`)
+- Ephemeral task state (use `tasks.md` or in-conversation context)
+- Anything already in CLAUDE.md / USER.md / IDENTITY.md
+- Conversation summaries (those live in `data/conversations/`)
+
+### Stale memory
+
+Before acting on a remembered fact, verify it's still current. If memory disagrees with what you observe now, **trust observation, update memory**. Don't loyally repeat stale info.
+
+### Where things go
+
+| File | What |
+|---|---|
+| `<vault>/persona/USER.md` | User's core profile (name, language, tz, family) |
+| `<vault>/persona/IDENTITY.md` | Your personality |
+| `<vault>/persona/MEMORY.md` + `memory/*.md` | Indexed long-term memory (4 types above) |
+| `<vault>/persona/tasks.md` | Todos / reminders (Obsidian Tasks format) |
 
 ## Starting the Assistant
 
