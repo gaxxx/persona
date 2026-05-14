@@ -85,6 +85,29 @@ Copy `.mcp.example.json` to `.mcp.json` (gitignored) and add your servers. stdio
 
 `<vault>/persona/IDENTITY.md`, `USER.md`, and the top-level `CLAUDE.md` are the levers for tone, language, quiet hours, memory rules. Onboarding fills the first two; the rest you tweak by hand. CLAUDE.md in particular is gitignored and synced via pbackup/pstore, so each user has their own without forking the repo.
 
+## Design choices
+
+A few non-obvious decisions and what they trade off:
+
+### Markdown + filesystem, not SQLite / a DB
+
+Plain markdown in your Obsidian vault, searched with ripgrep. The `kb-impl` skill is pluggable — swap in SQLite, embeddings, or whatever fits your data when you outgrow grep.
+
+### Rotate the inner `claude` subprocess, don't fight it
+
+Humans take naps; so does the assistant. Let it crash, rebuild the memory from disk. Defaults: 4h / 25 turns / 500K cache_read tokens, whichever fires first.
+
+## Learning from Claude Code's auto-memory
+
+*2026-05-14*
+
+Patterns borrowed from Claude Code's built-in auto-memory system (the one that lives in `~/.claude-loop/.../memory/`, not the third-party `claude-mem` skill):
+
+- **Typed memory** (`user` / `feedback` / `project` / `reference`) with an index + per-entry frontmatter, instead of one flat MEMORY.md
+- **Proactive triggers** — save on user corrections *and* confirmations, not just explicit "记住" / "remember"
+- **Why + How to apply** structure for feedback/project entries, so future-you can judge edge cases instead of mechanically following rules
+- **Stale memory verification** — trust live observation over stored fact when they conflict; update or drop the memory rather than parroting it
+
 ## Why a separate repo per user
 
 The repo holds the harness; your vault holds you. Personal data (identity, preferences, the knowledge base itself) lives outside the tracked tree, so the same code can be cloned and personalized by anyone without leaking the previous owner's life into git history.
