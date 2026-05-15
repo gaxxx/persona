@@ -69,8 +69,9 @@ When you reply to a photo/document, include enough description in your reply tha
 If \`reply_to\` is set, the user is replying to an earlier message. Use it as context for what they're responding to. If \`reply_to.from_bot\` is true, that prior message was from you - find it in data/conversations/YYYY-MM-DD.md to recover full context. If the replied-to had an attachment that was previously processed by this daemon, the file is at data/attachments/<reply_to.message_id>.* - Read it if relevant.
 
 Read CLAUDE.md (in cwd) for behaviour. Use the assistant-loop skill mechanics:
-read identity/user/conversation context, route to skills/MCP tools, reply via
-\`bun run bin/tg-send.ts <chat_id> "<msg>"\`, log to data/conversations/YYYY-MM-DD.md.
+read identity/user/conversation context, route to skills/MCP tools, write your
+reply as your final text in the turn (the daemon auto-sends it to Telegram),
+and log to data/conversations/YYYY-MM-DD.md.
 
 Conversation log timestamps MUST be in the user's wall-clock time (per USER.md \`Timezone\`), NOT UTC. The filename's YYYY-MM-DD and the \`[HH:MM]\` prefix on each line should both reflect the user's local day. Get a correct timestamp by running \`bun run bin/lib/user-tz.ts\` (prints \`YYYY-MM-DD HH:MM <tz>\`) — never construct from \`new Date().toISOString()\`, which is UTC and rolls past midnight ~5 hours before her wall clock does.
 
@@ -80,7 +81,7 @@ Conversation log loading discipline (overrides the skill's "always load" step):
   (a) the user references past events ("yesterday" / "earlier" / "我之前说过" / "上次" / etc),
   (b) \`reply_to.from_bot=true\` (find the original message),
   (c) the event JSON contains an \`external_writes_since_last_turn\` field — those lines were written by other processes (typically cron tasks) since your last turn. Treat them as already-read context. The field's content is the raw appended text from the conversation log; you don't need to Read the file to find it. If it ends with a "[TRUNCATED N bytes …]" marker, then Read the file to get the rest.
-- TRIVIAL messages (pure greetings like "你好" / "thanks" / "👍", or questions answerable from USER.md alone like "我在哪个时区"): skip reading the log entirely, even on the first turn — answer directly and call tg-send.
+- TRIVIAL messages (pure greetings like "你好" / "thanks" / "👍", or questions answerable from USER.md alone like "我在哪个时区"): skip reading the log entirely, even on the first turn — just answer directly.
 
 Discussion scratchpad — \`data/scratchpad.md\`:
 Multi-thread working-memory file. The conversation log preserves words but not the working frame (criteria, candidates, exclusions, leaning) for each open discussion. Scratchpad keeps that frame across subprocess rotations AND across topic switches within a day.
@@ -104,13 +105,25 @@ Skip the scratchpad entirely for one-shot answers and trivial messages.
 Do NOT start a Monitor or any watcher - the daemon owns Telegram polling.
 Do NOT call tg-pull.ts.
 
-CRITICAL: Every reply to the user MUST be sent via \`bun run bin/tg-send.ts <chat_id> "<msg>"\`. Never return the answer as result text without calling tg-send first — the result field is not visible to the user.
+Replying to the user: write your reply as the final text of your turn — the daemon auto-sends it to Telegram. You don't need to call tg-send.ts for ordinary text replies.
+
+Only call \`bun run bin/tg-send.ts <chat_id> "<msg>"\` explicitly when:
+- splitting one logical reply across multiple Telegram messages
+- sending an extra message after you've already used Bash this turn for something else (auto-send may dedupe in edge cases)
+- composing a message you want sent BEFORE doing further work in the same turn (e.g., "let me check..." → tool calls → final reply)
+
+For photos use \`bin/tg-send-photo.ts\`, for typing indicators use \`bin/tg-typing.ts\`. If any tg-send / tg-send-photo call happens in a turn, the daemon does NOT auto-send your final text — so include all the text you want sent in those explicit calls.
 
 Acknowledge with the single word READY.`;
 
+interface TurnResult {
+  result: string;       // assistant's final text (from result event)
+  sawTgSend: boolean;   // true if any Bash tool_use with bin/tg-send fired this turn
+}
+
 interface ClaudeProc {
   proc: Subprocess<"pipe", "pipe", "pipe">;
-  enqueue: (text: string) => Promise<void>;
+  enqueue: (text: string) => Promise<TurnResult>;
   shutdown: () => Promise<void>;
   isDead: () => boolean;
   getTurns: () => number;
@@ -165,13 +178,19 @@ function spawnClaude(): ClaudeProc {
   // Each enqueue resolves when we see the matching `result` event.
   // Single-flight: serialize via a chained promise.
   let chain: Promise<void> = Promise.resolve();
-  let pendingResolve: (() => void) | null = null;
+  let pendingResolve: ((r: TurnResult) => void) | null = null;
   // Fired once per turn the first time claude emits any assistant event
   // (text or tool_use). Used to swap thinking -> typing timeout.
   let onFirstResponse: (() => void) | null = null;
   // Most recent turn's accumulated context size (cache_read_input_tokens).
   // Used by rotateIfNeeded() as a cost-driven backstop alongside MAX_TURNS/MAX_AGE.
   let lastCacheRead = 0;
+  // Per-turn state for auto-send. Reset on each enqueue (at turn start).
+  // sawTgSendThisTurn flips true when the model invokes Bash with a command
+  // containing "bin/tg-send" (covers tg-send.ts and tg-send-photo.ts). If
+  // it stays false AND result text is non-empty, the daemon auto-sends.
+  let sawTgSendThisTurn = false;
+  let lastResultText = "";
   const enc = new TextEncoder();
 
   // Read stdout NDJSON forever, signal turn completion.
@@ -212,18 +231,34 @@ function spawnClaude(): ClaudeProc {
             log("registerSession failed:", (e as Error).message);
           }
         }
-        if (ev.type === "assistant" && onFirstResponse) {
-          const cb = onFirstResponse;
-          onFirstResponse = null;
-          cb();
+        if (ev.type === "assistant") {
+          // Scan this assistant message's content for any Bash tool_use that
+          // invokes bin/tg-send* — used to suppress auto-send at turn end.
+          const content = (ev as { message?: { content?: unknown } }).message?.content;
+          if (Array.isArray(content)) {
+            for (const c of content as Array<{ type?: string; name?: string; input?: { command?: string } }>) {
+              if (c?.type === "tool_use" && c?.name === "Bash") {
+                const cmd = c.input?.command ?? "";
+                if (cmd.includes("bin/tg-send")) sawTgSendThisTurn = true;
+              }
+            }
+          }
+          if (onFirstResponse) {
+            const cb = onFirstResponse;
+            onFirstResponse = null;
+            cb();
+          }
         }
         if (ev.type === "result") {
           if (typeof ev.usage?.cache_read_input_tokens === "number") {
             lastCacheRead = ev.usage.cache_read_input_tokens;
           }
+          if (typeof (ev as { result?: unknown }).result === "string") {
+            lastResultText = (ev as { result: string }).result;
+          }
           const r = pendingResolve;
           pendingResolve = null;
-          if (r) r();
+          if (r) r({ result: lastResultText, sawTgSend: sawTgSendThisTurn });
         }
       }
     }
@@ -237,11 +272,16 @@ function spawnClaude(): ClaudeProc {
     dead = true;
   });
 
-  function enqueue(text: string): Promise<void> {
+  function enqueue(text: string): Promise<TurnResult> {
     turns++;
     const turn = chain.then(
       () =>
-        new Promise<void>((resolve, reject) => {
+        new Promise<TurnResult>((resolve, reject) => {
+          // Reset per-turn state at the actual turn start (after prior
+          // turn's chain settles), not at enqueue() call time — otherwise
+          // queued-up enqueues would all clobber each other's state.
+          sawTgSendThisTurn = false;
+          lastResultText = "";
           let firstResponseTimer: ReturnType<typeof setTimeout> | undefined;
           let totalTimer: ReturnType<typeof setTimeout> | undefined;
           const cleanup = () => {
@@ -249,9 +289,9 @@ function spawnClaude(): ClaudeProc {
             if (totalTimer) { clearTimeout(totalTimer); totalTimer = undefined; }
             onFirstResponse = null;
           };
-          pendingResolve = () => {
+          pendingResolve = (r) => {
             cleanup();
-            resolve();
+            resolve(r);
           };
           const fireTimeout = (reason: string) => {
             if (pendingResolve === null) return;
@@ -533,7 +573,29 @@ async function dispatch(m: TelegramMessage, attachments: PendingAttachment[]): P
   sendTyping(m.chat.id).catch(() => {});
   const typingTimer = setInterval(() => { sendTyping(m.chat.id).catch(() => {}); }, 4000);
   try {
-    await claude.enqueue(`[Telegram event] ${JSON.stringify(event)}`);
+    const turnResult = await claude.enqueue(`[Telegram event] ${JSON.stringify(event)}`);
+    // Auto-send the model's final text if it didn't already call tg-send
+    // (or tg-send-photo) during the turn. This is the default reply path —
+    // the model only needs to call tg-send.ts explicitly for split messages,
+    // photos, or pre-tool messages. Aligns with the model's natural prior
+    // ("what I write is what the user sees") instead of fighting it.
+    if (!turnResult.sawTgSend && turnResult.result.trim()) {
+      try {
+        await sendMessage(m.chat.id, turnResult.result);
+        // Daemon owns the bot-line log entry too in this case, since the
+        // model didn't go through its usual reply path. We don't write the
+        // user line — the model handles that on first turn per SKILL.md.
+        const { date, hm } = userDateAndHm();
+        const logPath = `data/conversations/${date}.md`;
+        if (!existsSync("data/conversations")) mkdirSync("data/conversations", { recursive: true });
+        appendFileSync(
+          logPath,
+          `[${hm}] bot: ${turnResult.result.replace(/\n/g, " | ")}\n`,
+        );
+      } catch (e) {
+        log("auto-send failed:", (e as Error).message);
+      }
+    }
     // After claude's turn (incl. its own log writes), reset baseline so its
     // writes don't get re-flagged as external on the next turn.
     noteLogConsumed();
