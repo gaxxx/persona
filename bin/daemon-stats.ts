@@ -32,11 +32,17 @@ interface UsageRow {
 }
 
 function pgrep(pattern: string): number | null {
-  const r = spawnSync("pgrep", ["-f", pattern], { encoding: "utf8" });
-  const lines = r.stdout.trim().split("\n").filter(Boolean);
-  for (const l of lines) {
-    const pid = parseInt(l, 10);
-    if (Number.isFinite(pid) && pid !== process.pid) return pid;
+  // Retry once after 200ms — pgrep occasionally returns empty on macOS even
+  // when the process is alive (suspected: brief contention during pgrep's
+  // own ps scan). Without retry, /stats can falsely report DOWN.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = spawnSync("pgrep", ["-f", pattern], { encoding: "utf8" });
+    const lines = r.stdout.trim().split("\n").filter(Boolean);
+    for (const l of lines) {
+      const pid = parseInt(l, 10);
+      if (Number.isFinite(pid) && pid !== process.pid) return pid;
+    }
+    if (attempt === 0) Bun.sleepSync(200);
   }
   return null;
 }
@@ -212,11 +218,11 @@ function tgDaemonReport(): string {
     // never both — the latter writes to PROJECTS_DIR too, so we can still
     // show useful token stats.
     const session = findLatestSession();
-    if (!session) return "tg-daemon: ❌ DOWN (no fallback session)";
+    if (!session) return "tg-daemon: ❌ DOWN (no pid, no fallback session — watchdog respawns within 60s if dead)";
     const st = statSync(session);
     const ageSec = Math.floor((Date.now() - st.mtimeMs) / 1000);
     if (ageSec > 30 * 60) {
-      return `tg-daemon: ❌ DOWN (last session ${fmtDuration(ageSec)} stale)`;
+      return `tg-daemon: ❌ DOWN (no pid; fallback session ${fmtDuration(ageSec)} stale — watchdog respawns within 60s if dead)`;
     }
     const s = readSessionStats(session);
     const lines = [
