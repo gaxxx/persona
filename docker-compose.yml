@@ -8,6 +8,10 @@ services:
     # bypass setup.sh.
     environment:
       - TZ=${TZ:-America/New_York}
+      # UTF-8 locale so tmux/bash render Chinese (and any non-ASCII) correctly.
+      # C.UTF-8 is installed in the base image; LC_ALL pins it past inheriting POSIX.
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
       # Inside the container the vault is always /vault.
       - VAULT_PATH=/vault
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:?run ./setup.sh first}

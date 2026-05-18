@@ -85,7 +85,7 @@ export async function tgSend(chatId: number | string, message: string): Promise<
  * silently drop notifications.
  */
 export function defaultChatId(): string {
-  const raw = process.env.TELEGRAM_CHAT_IDS ?? process.env.TELEGRAM_CHAT_ID ?? "";
+  const raw = process.env.TELEGRAM_CHAT_IDS || process.env.TELEGRAM_CHAT_ID || "";
   const first = raw.split(",")[0].trim();
   if (!first) {
     throw new Error("TELEGRAM_CHAT_ID (or TELEGRAM_CHAT_IDS) not set in .env");

@@ -58,7 +58,7 @@ function log(...parts: unknown[]) {
 const PRIMING = `You are a personal assistant running inside a long-lived daemon process. Read CLAUDE.md and <vault>/persona/USER.md to learn who your human is.
 
 Each user turn I send you is one Telegram event in this exact form:
-  [Telegram event] {"chat_id":..., "from":"...", "text":"...", "attachment":{kind,path,name?,mime?}|undefined, "date":"...", "message_id":...}
+  [Telegram event] {"chat_id":..., "from":"...", "text":"...", "attachment":{kind,path,name?,mime?}|undefined, "date":"...", "message_id":..., "active_threads":["slug1","slug2",...] (optional)}
 
 If \`attachment\` is set, the user attached a single file. \`kind\` is "photo" / "document" / "sticker". \`path\` is a relative path under data/attachments/. Read it with the Read tool - Read supports images and PDFs natively. Stickers may be webp/tgs/webm; for tgs/webm just acknowledge the sticker (use \`name\` if it's an emoji). \`text\` is caption or a placeholder if none.
 
@@ -95,10 +95,19 @@ LOAD on FIRST turn after spawn alongside the conversation log. Find the thread t
 RE-READ on every multi-turn decision turn before composing your reply (one Read, cheap). Honor ⚠️ lines on the active thread — those are constraints you already committed to, do not contradict them. Skip the re-read for one-shot answers, trivial messages, and pure conversational turns.
 
 UPDATE on frame-change turns (one Edit/Write per turn):
-- new constraint / candidate / exclusion / leaning → edit the matching thread
+- new constraint / candidate / exclusion / leaning → edit the matching thread (and bump its **Touched:** to now — stale Touched gets the thread auto-deferred)
 - decided ("就这个" / "下单了" / "OK 拍") → move thread to \`## Recently decided\`, add **Decided:** time + **Result:** one-line outcome + **Archive-by:** (24h later)
 - deferred ("等一等" / "8 月再说") → move to \`## Deferred\` with trigger/date
 - new topic mid-day → ADD a new \`### thread:\` under \`## Active\`. NEVER overwrite other threads.
+
+THREAD MATCHING (do this BEFORE composing any multi-turn decision reply):
+- The event JSON includes \`active_threads:[slug, ...]\` — the open thread slugs from \`## Active\`, pre-extracted for you. Use it instead of re-reading the file just to enumerate slugs.
+- Match on **noun + location/use case**, not noun alone. Same noun ≠ same thread:
+    "镜子" + 主卫 vs "镜子" + 客厅 WIC → TWO different threads.
+    "马桶" + 主卫 vs "马桶" + 客卫 → TWO different threads.
+- If exactly one slug matches → Read that thread's body, honor its ⚠️ lines, compose.
+- If none matches → ADD a new \`### thread:\` BEFORE composing. Don't silently merge into the nearest-noun thread.
+- If multiple slugs could match and the user wasn't specific → ASK which one ("是说主卫那面镜子还是客厅 WIC 那面？") rather than guess. One short clarifying question beats 30 minutes of misaligned recommendations.
 
 Skip the scratchpad entirely for one-shot answers and trivial messages.
 
@@ -198,6 +207,12 @@ async function notifyRateLimitRejected(resetsAtSec: number) {
 const FIRST_RESPONSE_TIMEOUT_MS = 2 * 60 * 1000;
 const TOTAL_TIMEOUT_MS = 15 * 60 * 1000;
 const TURN_TIMEOUT_ERR = "turn timeout";
+
+// Stale-auth detection. The inner claude is a long-running stream-json
+// subprocess; if credentials rotate (or get rewritten) mid-session it can
+// hold expired in-memory auth and return this string on every turn until
+// killed. Match → kill + respawn, don't echo to Telegram.
+const AUTH_ERROR_PATTERN = /Not logged in|Please run \/login/;
 
 function spawnClaude(): ClaudeProc {
   log("spawning claude subprocess");
@@ -362,6 +377,15 @@ function spawnClaude(): ClaudeProc {
             cleanup();
             log(`turn timed out (${reason}), killing claude`);
             try { proc.kill(); } catch {}
+            // SIGTERM is sometimes ignored by the claude CLI; escalate to
+            // SIGKILL after a grace period so proc.exited fires and the
+            // auto-respawn handler can replace the zombie.
+            setTimeout(() => {
+              if (proc.exitCode === null) {
+                log("claude still alive 5s after SIGTERM, sending SIGKILL");
+                try { proc.kill("SIGKILL"); } catch {}
+              }
+            }, 5000);
             reject(new Error(TURN_TIMEOUT_ERR));
           };
           firstResponseTimer = setTimeout(
@@ -536,6 +560,29 @@ function noteLogConsumed(): void {
   lastSeenLogSizes[date] = currentLogSize(path);
 }
 
+// Extract the list of currently-active thread slugs from data/scratchpad.md.
+// Injected per-turn so the model sees which discussions are open without
+// having to re-read the whole file. Returns [] on any read/parse failure —
+// never throws, never blocks daemon.
+function readActiveThreadSlugs(): string[] {
+  try {
+    const content = readFileSync("data/scratchpad.md", "utf8");
+    const activeStart = content.search(/^## Active\s*$/m);
+    if (activeStart < 0) return [];
+    // End of Active = next "## " heading, or EOF
+    const rest = content.slice(activeStart + "## Active".length);
+    const nextSection = rest.search(/^## /m);
+    const activeBody = nextSection < 0 ? rest : rest.slice(0, nextSection);
+    const slugs: string[] = [];
+    for (const m of activeBody.matchAll(/^### thread:\s*(.+)$/gm)) {
+      slugs.push(m[1].trim());
+    }
+    return slugs;
+  } catch {
+    return [];
+  }
+}
+
 // ---- Attachment + media-group helpers -------------------------------------
 
 interface PendingAttachment { kind: string; path: string; name?: string; mime?: string }
@@ -632,11 +679,21 @@ async function dispatch(m: TelegramMessage, attachments: PendingAttachment[]): P
   else if (attachments.length > 1) event.attachments = attachments;
   const externalWrites = readExternalWritesSinceLastTurn();
   if (externalWrites) event.external_writes_since_last_turn = externalWrites;
+  const activeThreads = readActiveThreadSlugs();
+  if (activeThreads.length > 0) event.active_threads = activeThreads;
   log("-> telegram event", event);
   sendTyping(m.chat.id).catch(() => {});
   const typingTimer = setInterval(() => { sendTyping(m.chat.id).catch(() => {}); }, 4000);
   try {
     const turnResult = await claude.enqueue(`[Telegram event] ${JSON.stringify(event)}`);
+    if (AUTH_ERROR_PATTERN.test(turnResult.result)) {
+      log("auth failure detected in result, killing subprocess to force respawn");
+      sendMessage(m.chat.id, "🚨 我的身份验证过期了，正在重启子进程。几秒后再发一次就行～")
+        .catch((e) => log("auth-alert send failed:", (e as Error).message));
+      try { claude.proc.kill(); } catch {}
+      // attachExitHandler spawns a fresh subprocess that reads current creds.
+      return;
+    }
     // Auto-send the model's final text if it didn't already call tg-send
     // (or tg-send-photo) during the turn. This is the default reply path —
     // the model only needs to call tg-send.ts explicitly for split messages,
