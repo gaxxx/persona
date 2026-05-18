@@ -140,8 +140,58 @@ const MAX_AGE_MS = 4 * 60 * 60 * 1000;
 // we've completed a few turns, rotate. The 5-turn floor avoids same-turn
 // loops on photo/PDF Reads (a single 200K image would otherwise trigger
 // rotation on the very turn that needed it).
-const MAX_CACHE_READ = 500_000;
+const MAX_CACHE_READ = 300_000;
 const MIN_TURNS_FOR_CACHE_ROTATION = 5;
+
+// Primary chat id (used by graceful rate-limit notifications below). First
+// allowed chat id is the one we ping with system notices.
+const PRIMARY_CHAT_ID = [...ALLOWED_CHAT_IDS][0];
+
+// Rate-limit notification de-dup state. Each 5-hour or monthly window has a
+// unique `resetsAt` (unix seconds); we send at most one warning + one
+// rejection per window so we don't spam the user.
+let lastWarningResetsAt = 0;
+let lastRejectionResetsAt = 0;
+const WARNING_UTILIZATION_THRESHOLD = 0.9;
+
+function formatResetTime(resetsAtSec: number): string {
+  // 24-hour ET per the user's preferred time format (see USER.md).
+  try {
+    return new Date(resetsAtSec * 1000).toLocaleTimeString("en-US", {
+      timeZone: "America/New_York",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+  } catch {
+    return new Date(resetsAtSec * 1000).toISOString();
+  }
+}
+
+async function notifyRateLimitWarning(utilization: number, resetsAtSec: number) {
+  if (resetsAtSec <= lastWarningResetsAt) return; // already warned for this window
+  lastWarningResetsAt = resetsAtSec;
+  log(`rate-limit warning: utilization=${(utilization * 100).toFixed(0)}% resetsAt=${new Date(resetsAtSec * 1000).toISOString()}`);
+  try {
+    await sendMessage(
+      PRIMARY_CHAT_ID,
+      `🐉 我快用完这个 5 小时窗口的 token 配额了（${Math.round(utilization * 100)}%）。${formatResetTime(resetsAtSec)} ET 之前可能慢点回复，但还在哦～`,
+    );
+  } catch (e) { log("warning notify failed:", (e as Error).message); }
+}
+
+async function notifyRateLimitRejected(resetsAtSec: number) {
+  if (resetsAtSec <= lastRejectionResetsAt) return; // already notified for this window
+  lastRejectionResetsAt = resetsAtSec;
+  log(`rate-limit REJECTED, resetsAt=${new Date(resetsAtSec * 1000).toISOString()}`);
+  try {
+    await sendMessage(
+      PRIMARY_CHAT_ID,
+      `⏸ 我刚刚 token 用完了，要等 ${formatResetTime(resetsAtSec)} ET 配额刷新才能继续帮你。先休息一下哦～ 💤`,
+    );
+  } catch (e) { log("rejected notify failed:", (e as Error).message); }
+}
+
 // Two-phase timeout: thinking (no output yet) gets a tight cap to catch hung
 // loops fast; once claude starts producing output we extend to a generous
 // total so long but actively-streaming turns don't get murdered.
@@ -229,6 +279,19 @@ function spawnClaude(): ClaudeProc {
             registerSession(ev.session_id, "tg");
           } catch (e) {
             log("registerSession failed:", (e as Error).message);
+          }
+        }
+        // Graceful rate-limit messaging: warn the user preemptively when utilization
+        // crosses 90% and again when a request actually gets rejected. Once per
+        // window (de-duped by resetsAt).
+        if (ev.type === "rate_limit_event") {
+          const info = (ev as { rate_limit_info?: { status?: string; utilization?: number; resetsAt?: number } }).rate_limit_info;
+          if (info && typeof info.resetsAt === "number") {
+            if (info.status === "allowed_warning" && (info.utilization ?? 0) >= WARNING_UTILIZATION_THRESHOLD) {
+              notifyRateLimitWarning(info.utilization ?? 0, info.resetsAt);
+            } else if (info.status === "rejected") {
+              notifyRateLimitRejected(info.resetsAt);
+            }
           }
         }
         if (ev.type === "assistant") {
