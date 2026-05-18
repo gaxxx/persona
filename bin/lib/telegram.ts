@@ -87,6 +87,28 @@ export async function sendPhoto(chatId: number, filePath: string, caption?: stri
   if (!json.ok) throw new Error(`Telegram sendPhoto: ${json.description}`);
 }
 
+// sendDocument: uploads any file as-is (no compression, no resize). Use this
+// instead of sendPhoto for engineering drawings, diagrams with fine labels,
+// HTML, SVG, PDF — anything where preserving every pixel / making the file
+// downloadable matters. Optionally specify mime to control how Telegram
+// labels it (HTML→opens in browser on tap, SVG→shows as vector file, etc).
+export async function sendDocument(chatId: number, filePath: string, caption?: string, mime?: string): Promise<void> {
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  if (mime) {
+    // Wrap the file with an explicit MIME type by reading bytes + reattaching
+    const bytes = await Bun.file(filePath).arrayBuffer();
+    const name = filePath.split("/").pop() ?? "document";
+    form.append("document", new Blob([bytes], { type: mime }), name);
+  } else {
+    form.append("document", Bun.file(filePath));
+  }
+  if (caption) form.append("caption", caption);
+  const res = await fetchWithTimeout(`${API}/sendDocument`, { method: "POST", body: form, timeoutMs: 60_000 });
+  const json = (await res.json()) as { ok: boolean; description?: string };
+  if (!json.ok) throw new Error(`Telegram sendDocument: ${json.description}`);
+}
+
 export async function getFileUrl(fileId: string): Promise<string> {
   const file = await callApi<{ file_path: string }>("getFile", { file_id: fileId });
   return `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`;

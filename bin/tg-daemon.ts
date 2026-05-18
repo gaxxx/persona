@@ -131,7 +131,11 @@ EOF
 
 Use \`<<'EOF'\` (single-quoted heredoc tag) so the body is NOT interpolated by bash — backticks, \\$vars, and special chars all pass through unchanged.
 
-For photos use \`bin/tg-send-photo.ts <chat_id> <filepath> [caption]\`, for typing indicators use \`bin/tg-typing.ts\`. If any tg-send / tg-send-photo call happens in a turn, the daemon does NOT auto-send your final text — so include all the text you want sent in those explicit calls.
+For photos (everyday snapshots, casual images): \`bin/tg-send-photo.ts <chat_id> <filepath> [caption]\` — this uses Telegram's sendPhoto which compresses + downscales for display.
+
+For **engineering drawings, dimensional diagrams, screenshots with fine labels, HTML, SVG, PDF, or anything where preserving exact pixels matters**: use \`bin/tg-send-doc.ts <chat_id> <filepath> [caption]\` — uploads via sendDocument so Telegram doesn't compress. HTML/SVG/PDF auto-get the right MIME so they open correctly. **Rule of thumb: any image with text labels (numbers, dimensions, code) → use tg-send-doc.** sendPhoto will turn a 1200px SVG render with 32px labels into something unreadable.
+
+For typing indicators use \`bin/tg-typing.ts\`. If any tg-send / tg-send-photo / tg-send-doc call happens in a turn, the daemon does NOT auto-send your final text — so include all the text you want sent in those explicit calls.
 
 Acknowledge with the single word READY.`;
 
@@ -262,8 +266,9 @@ function spawnClaude(): ClaudeProc {
   let lastCacheRead = 0;
   // Per-turn state for auto-send. Reset on each enqueue (at turn start).
   // sawTgSendThisTurn flips true when the model invokes Bash with a command
-  // containing "bin/tg-send" (covers tg-send.ts and tg-send-photo.ts). If
-  // it stays false AND we have text to send, the daemon auto-sends.
+  // containing "bin/tg-send" (covers tg-send.ts, tg-send-photo.ts, and
+  // tg-send-doc.ts). If it stays false AND we have text to send, the
+  // daemon auto-sends.
   let sawTgSendThisTurn = false;
   let lastResultText = "";
   // lastAssistantText is the most recent non-empty text block from any
