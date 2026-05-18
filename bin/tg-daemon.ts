@@ -116,12 +116,22 @@ Do NOT call tg-pull.ts.
 
 Replying to the user: write your reply as the final text of your turn — the daemon auto-sends it to Telegram. You don't need to call tg-send.ts for ordinary text replies.
 
-Only call \`bun run bin/tg-send.ts <chat_id> "<msg>"\` explicitly when:
+Only call \`bin/tg-send.ts\` explicitly when:
 - splitting one logical reply across multiple Telegram messages
 - sending an extra message after you've already used Bash this turn for something else (auto-send may dedupe in edge cases)
 - composing a message you want sent BEFORE doing further work in the same turn (e.g., "let me check..." → tool calls → final reply)
 
-For photos use \`bin/tg-send-photo.ts\`, for typing indicators use \`bin/tg-typing.ts\`. If any tg-send / tg-send-photo call happens in a turn, the daemon does NOT auto-send your final text — so include all the text you want sent in those explicit calls.
+CRITICAL: tg-send.ts reads the body from **stdin only** (argv body is rejected). Always use a heredoc — argv quoting breaks on embedded \`"\`, inches \`''\`, or any Chinese punctuation that triggers shell word-splitting:
+
+\`\`\`bash
+cat <<'EOF' | bun run bin/tg-send.ts <chat_id>
+your message here, with " and ' and 中文 freely
+EOF
+\`\`\`
+
+Use \`<<'EOF'\` (single-quoted heredoc tag) so the body is NOT interpolated by bash — backticks, \\$vars, and special chars all pass through unchanged.
+
+For photos use \`bin/tg-send-photo.ts <chat_id> <filepath> [caption]\`, for typing indicators use \`bin/tg-typing.ts\`. If any tg-send / tg-send-photo call happens in a turn, the daemon does NOT auto-send your final text — so include all the text you want sent in those explicit calls.
 
 Acknowledge with the single word READY.`;
 
@@ -253,9 +263,15 @@ function spawnClaude(): ClaudeProc {
   // Per-turn state for auto-send. Reset on each enqueue (at turn start).
   // sawTgSendThisTurn flips true when the model invokes Bash with a command
   // containing "bin/tg-send" (covers tg-send.ts and tg-send-photo.ts). If
-  // it stays false AND result text is non-empty, the daemon auto-sends.
+  // it stays false AND we have text to send, the daemon auto-sends.
   let sawTgSendThisTurn = false;
   let lastResultText = "";
+  // lastAssistantText is the most recent non-empty text block from any
+  // assistant event this turn. Fallback for when the model intended its
+  // tg-send to be the reply but the call failed (quoting / typo) and the
+  // result event came back with empty `result` — we'd otherwise have
+  // nothing to auto-send. Updated continuously; final value wins.
+  let lastAssistantText = "";
   const enc = new TextEncoder();
 
   // Read stdout NDJSON forever, signal turn completion.
@@ -310,14 +326,18 @@ function spawnClaude(): ClaudeProc {
           }
         }
         if (ev.type === "assistant") {
-          // Scan this assistant message's content for any Bash tool_use that
-          // invokes bin/tg-send* — used to suppress auto-send at turn end.
+          // Scan this assistant message's content for (a) Bash tool_use that
+          // invokes bin/tg-send* (suppresses auto-send), and (b) text blocks
+          // that we'll fall back to if the result event comes back empty.
           const content = (ev as { message?: { content?: unknown } }).message?.content;
           if (Array.isArray(content)) {
-            for (const c of content as Array<{ type?: string; name?: string; input?: { command?: string } }>) {
+            for (const c of content as Array<{ type?: string; name?: string; input?: { command?: string }; text?: string }>) {
               if (c?.type === "tool_use" && c?.name === "Bash") {
                 const cmd = c.input?.command ?? "";
                 if (cmd.includes("bin/tg-send")) sawTgSendThisTurn = true;
+              }
+              if (c?.type === "text" && typeof c.text === "string" && c.text.trim()) {
+                lastAssistantText = c.text;
               }
             }
           }
@@ -334,9 +354,14 @@ function spawnClaude(): ClaudeProc {
           if (typeof (ev as { result?: unknown }).result === "string") {
             lastResultText = (ev as { result: string }).result;
           }
+          // Fallback: if result is empty (model expected its tg-send to BE
+          // the reply, e.g. quoting failure swallowed the message) AND we
+          // captured an assistant text block earlier, use that instead.
+          // Better an over-eager auto-send than a silent drop.
+          const finalText = lastResultText.trim() ? lastResultText : lastAssistantText;
           const r = pendingResolve;
           pendingResolve = null;
-          if (r) r({ result: lastResultText, sawTgSend: sawTgSendThisTurn });
+          if (r) r({ result: finalText, sawTgSend: sawTgSendThisTurn });
         }
       }
     }
@@ -360,6 +385,7 @@ function spawnClaude(): ClaudeProc {
           // queued-up enqueues would all clobber each other's state.
           sawTgSendThisTurn = false;
           lastResultText = "";
+          lastAssistantText = "";
           let firstResponseTimer: ReturnType<typeof setTimeout> | undefined;
           let totalTimer: ReturnType<typeof setTimeout> | undefined;
           const cleanup = () => {
