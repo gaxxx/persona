@@ -5,6 +5,7 @@
 # Scope:
 #   - personal skills (any skill in vault that's not in SHARED_SKILLS)
 #   - CLAUDE.md, CLAUDE.local.md
+#   - mcp-credentials/ (gmail oauth tokens etc — watchdog symlinks into $HOME)
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -48,6 +49,13 @@ for f in CLAUDE.md CLAUDE.local.md; do
   cp "$src" "$f"
   restored+=("$f")
 done
+
+# MCP credentials
+if [ -d "$VAULT_PERSONA/mcp-credentials" ]; then
+  rm -rf mcp-credentials
+  cp -r "$VAULT_PERSONA/mcp-credentials" mcp-credentials
+  restored+=("mcp-credentials")
+fi
 
 if [ "${#restored[@]}" -eq 0 ]; then
   echo "nothing to restore (vault has no personal skills or CLAUDE files)"

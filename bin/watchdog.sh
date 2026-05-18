@@ -120,6 +120,17 @@ if [ "${1:-}" != "--once" ]; then
   sweep_orphans
 fi
 
+# Bridge MCP credential dirs from the persistent vault into $HOME so MCPs
+# that hard-code ~/.foo-mcp (e.g. @gongrzhe/server-gmail-autoauth-mcp) find
+# their auth on every container restart. ln -sfn is atomic + idempotent.
+link_mcp_credentials() {
+  local d
+  for d in "$REPO_ROOT"/mcp-credentials/.*-mcp; do
+    [ -d "$d" ] || continue
+    ln -sfn "$d" "$HOME/$(basename "$d")"
+  done
+}
+
 notify() {
   local msg="$1"
   log "$msg"
@@ -182,6 +193,7 @@ is_heartbeat_fresh() {
 }
 
 check_once() {
+  link_mcp_credentials
   adopt_existing "$TG_PIDFILE" "bin/tg-daemon.ts"
   adopt_existing "$CRON_PIDFILE" "bin/cron-daemon.ts"
 

@@ -7,6 +7,7 @@
 #     which are committed to git per .gitignore exception list)
 #   - CLAUDE.md (real file at repo root)
 #   - CLAUDE.local.md (optional personal-overrides split)
+#   - mcp-credentials/ (gmail oauth tokens etc — watchdog symlinks into $HOME)
 #
 # NOT in scope (lives in vault directly, no repo copy):
 #   - USER.md, IDENTITY.md, MEMORY.md, tasks.md, CRON.md
@@ -55,6 +56,15 @@ for f in CLAUDE.md CLAUDE.local.md; do
     backed_up+=("$f")
   fi
 done
+
+# MCP credentials — see watchdog's link_mcp_credentials(). Refresh tokens are
+# long-lived (months/years for Google OAuth), so a backup stays usable even
+# after the in-place credentials.json gets rewritten by token refresh.
+if [ -d mcp-credentials ]; then
+  rm -rf "$VAULT_PERSONA/mcp-credentials"
+  cp -r mcp-credentials "$VAULT_PERSONA/mcp-credentials"
+  backed_up+=("mcp-credentials")
+fi
 
 if [ "${#backed_up[@]}" -eq 0 ]; then
   echo "nothing to back up"
