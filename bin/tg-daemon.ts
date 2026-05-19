@@ -24,6 +24,16 @@ const OFFSET_FILE = "data/tg-offset.json";
 const LOG_FILE = "data/daemon.log";
 const HEARTBEAT_FILE = "data/tg-daemon-heartbeat";
 const LONG_POLL_TIMEOUT = 25;
+
+// MCP per-server status cache, authoritative source = claude's system/init
+// event. Each turn-1 of a fresh subprocess reports per-server connection
+// outcome (connected / failed / needs-auth). We cache that and skip "failed"
+// servers in the NEXT .mcp.json so claude doesn't waste connect-timeout time
+// trying them again. Per-server exponential backoff retries (1, 2, 4, 8,
+// 16 min cap) so a recovered server is re-tested within ≤16 min.
+const MCP_LOCAL_PATH = ".mcp.local.json"; // source of truth (gitignored)
+const MCP_OUT_PATH = ".mcp.json";          // generated, claude reads this
+const MCP_STATUS_PATH = "data/mcp-status.json";
 // Cap external-writes payload to keep event JSON sane. If an unusually huge
 // cron output appears between turns, the payload gets truncated and claude
 // can re-read the file if needed (the truncated marker is unmistakable).
@@ -51,6 +61,94 @@ function log(...parts: unknown[]) {
   const line = `[${new Date().toISOString()}] ${parts.map((p) => (typeof p === "string" ? p : JSON.stringify(p))).join(" ")}\n`;
   appendFileSync(LOG_FILE, line);
   process.stdout.write(line);
+}
+
+// ---- MCP per-server status cache ------------------------------------------
+
+interface McpServerStatus {
+  status: string;                 // raw claude status: "connected" / "failed" / "needs-auth" / ...
+  lastCheckedAt: number;          // epoch ms when last init event reported this
+  consecutiveFailures: number;    // for exponential retry on "failed"
+}
+
+type McpStatusCache = Record<string, McpServerStatus>;
+
+let mcpStatusCache: McpStatusCache = (() => {
+  try {
+    return JSON.parse(readFileSync(MCP_STATUS_PATH, "utf-8")) as McpStatusCache;
+  } catch {
+    return {};
+  }
+})();
+
+function saveMcpStatusCache() {
+  try {
+    writeFileSync(MCP_STATUS_PATH, JSON.stringify(mcpStatusCache, null, 2));
+  } catch (e) {
+    log("mcp: save status cache failed:", (e as Error).message);
+  }
+}
+
+// Per-server retry timing: 1, 2, 4, 8, 16 min cap. Server is "still
+// excluded" until that delay has passed since the last failed check.
+function isOnCooldown(name: string): boolean {
+  const s = mcpStatusCache[name];
+  if (!s || s.status === "connected" || s.status === "needs-auth") return false;
+  // status is "failed" (or other unknown bad state)
+  const delayMin = Math.min(2 ** s.consecutiveFailures, 16);
+  const age = Date.now() - s.lastCheckedAt;
+  return age < delayMin * 60_000;
+}
+
+function updateMcpStatuses(servers: Array<{ name?: string; status?: string }>): void {
+  let anyChange = false;
+  for (const s of servers) {
+    if (!s.name || !s.status) continue;
+    const prev = mcpStatusCache[s.name];
+    const ok = s.status === "connected" || s.status === "needs-auth";
+    const consecutiveFailures = ok ? 0 : (prev?.consecutiveFailures ?? 0) + 1;
+    mcpStatusCache[s.name] = {
+      status: s.status,
+      lastCheckedAt: Date.now(),
+      consecutiveFailures,
+    };
+    if (!prev || prev.status !== s.status) anyChange = true;
+  }
+  if (anyChange) {
+    const summary = Object.entries(mcpStatusCache)
+      .map(([n, v]) => `${n}=${v.status}`)
+      .join(", ");
+    log(`mcp: status cache updated [${summary}]`);
+  }
+  saveMcpStatusCache();
+}
+
+function writeMcpConfig(): void {
+  if (!existsSync(MCP_LOCAL_PATH)) {
+    log(`mcp: ${MCP_LOCAL_PATH} not found, leaving ${MCP_OUT_PATH} as-is`);
+    return;
+  }
+  const local = JSON.parse(readFileSync(MCP_LOCAL_PATH, "utf-8")) as {
+    mcpServers?: Record<string, unknown>;
+  };
+  const out: { mcpServers: Record<string, unknown> } = { mcpServers: {} };
+  const skipped: string[] = [];
+  for (const [name, srv] of Object.entries(local.mcpServers ?? {})) {
+    if (isOnCooldown(name)) {
+      const s = mcpStatusCache[name];
+      const delayMin = Math.min(2 ** s.consecutiveFailures, 16);
+      const retryInMs = delayMin * 60_000 - (Date.now() - s.lastCheckedAt);
+      skipped.push(`${name}(retry in ${Math.round(retryInMs / 60_000)}min, ${s.consecutiveFailures} fails)`);
+      continue;
+    }
+    out.mcpServers[name] = srv;
+  }
+  writeFileSync(MCP_OUT_PATH, JSON.stringify(out, null, 2) + "\n");
+  if (skipped.length > 0) {
+    log(`mcp: wrote ${MCP_OUT_PATH} (skipped: ${skipped.join("; ")})`);
+  } else {
+    log(`mcp: wrote ${MCP_OUT_PATH} (all ${Object.keys(out.mcpServers).length} servers)`);
+  }
 }
 
 // ---- Claude subprocess ----------------------------------------------------
@@ -157,13 +255,13 @@ interface ClaudeProc {
 // Rotate the inner claude before context grows unbounded — context is held in
 // RAM as KV cache, and macOS will SIGKILL it under memory pressure (we got
 // burned at 2.7M cached tokens). Whichever fires first.
-const MAX_TURNS = 25;
-const MAX_AGE_MS = 4 * 60 * 60 * 1000;
+const MAX_TURNS = 50;
+const MAX_AGE_MS = 8 * 60 * 60 * 1000;
 // Cost-driven backstop: if accumulated context (cache_read) exceeds this AND
 // we've completed a few turns, rotate. The 5-turn floor avoids same-turn
 // loops on photo/PDF Reads (a single 200K image would otherwise trigger
 // rotation on the very turn that needed it).
-const MAX_CACHE_READ = 300_000;
+const MAX_CACHE_READ = 600_000;
 const MIN_TURNS_FOR_CACHE_ROTATION = 5;
 
 // Primary chat id (used by graceful rate-limit notifications below). First
@@ -218,7 +316,11 @@ async function notifyRateLimitRejected(resetsAtSec: number) {
 // Two-phase timeout: thinking (no output yet) gets a tight cap to catch hung
 // loops fast; once claude starts producing output we extend to a generous
 // total so long but actively-streaming turns don't get murdered.
-const FIRST_RESPONSE_TIMEOUT_MS = 2 * 60 * 1000;
+// Idle timer: kill if no claude events arrive within this window. Resets on
+// every event (assistant text/tool_use, tool_result, system/init, etc).
+// Replaces the old "first response" timer — active multi-tool turns stay
+// alive as long as events keep coming.
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const TOTAL_TIMEOUT_MS = 15 * 60 * 1000;
 const TURN_TIMEOUT_ERR = "turn timeout";
 
@@ -229,6 +331,9 @@ const TURN_TIMEOUT_ERR = "turn timeout";
 const AUTH_ERROR_PATTERN = /Not logged in|Please run \/login/;
 
 function spawnClaude(): ClaudeProc {
+  // Refresh .mcp.json from .mcp.local.json + latest probe cache. Cheap
+  // (single file read+write), happens once per spawn.
+  writeMcpConfig();
   log("spawning claude subprocess");
   // Strip Claude Code session vars so the spawned `claude -p` doesn't
   // refuse to start as a nested session when this daemon was launched
@@ -258,9 +363,9 @@ function spawnClaude(): ClaudeProc {
   // Single-flight: serialize via a chained promise.
   let chain: Promise<void> = Promise.resolve();
   let pendingResolve: ((r: TurnResult) => void) | null = null;
-  // Fired once per turn the first time claude emits any assistant event
-  // (text or tool_use). Used to swap thinking -> typing timeout.
-  let onFirstResponse: (() => void) | null = null;
+  // Called by the event reader on every claude event to reset the idle
+  // timer. Set per-turn in enqueue(); cleared after the turn settles.
+  let resetIdleTimer: (() => void) | null = null;
   // Most recent turn's accumulated context size (cache_read_input_tokens).
   // Used by rotateIfNeeded() as a cost-driven backstop alongside MAX_TURNS/MAX_AGE.
   let lastCacheRead = 0;
@@ -297,6 +402,8 @@ function spawnClaude(): ClaudeProc {
         // progressing turn (multi-tool research, etc.) keeps the watchdog
         // satisfied. Only true silence means stuck.
         try { writeFileSync(HEARTBEAT_FILE, new Date().toISOString()); } catch {}
+        // Reset idle timeout: any event from claude means the turn is alive.
+        resetIdleTimer?.();
         log("claude:", line);
         let ev: {
           type?: string;
@@ -315,6 +422,11 @@ function spawnClaude(): ClaudeProc {
             registerSession(ev.session_id, "tg");
           } catch (e) {
             log("registerSession failed:", (e as Error).message);
+          }
+          // Capture per-server MCP statuses for next .mcp.json filtering.
+          const mcpServers = (ev as { mcp_servers?: Array<{ name?: string; status?: string }> }).mcp_servers;
+          if (Array.isArray(mcpServers)) {
+            updateMcpStatuses(mcpServers);
           }
         }
         // Graceful rate-limit messaging: warn the user preemptively when utilization
@@ -345,11 +457,6 @@ function spawnClaude(): ClaudeProc {
                 lastAssistantText = c.text;
               }
             }
-          }
-          if (onFirstResponse) {
-            const cb = onFirstResponse;
-            onFirstResponse = null;
-            cb();
           }
         }
         if (ev.type === "result") {
@@ -391,12 +498,12 @@ function spawnClaude(): ClaudeProc {
           sawTgSendThisTurn = false;
           lastResultText = "";
           lastAssistantText = "";
-          let firstResponseTimer: ReturnType<typeof setTimeout> | undefined;
+          let idleTimer: ReturnType<typeof setTimeout> | undefined;
           let totalTimer: ReturnType<typeof setTimeout> | undefined;
           const cleanup = () => {
-            if (firstResponseTimer) { clearTimeout(firstResponseTimer); firstResponseTimer = undefined; }
+            if (idleTimer) { clearTimeout(idleTimer); idleTimer = undefined; }
             if (totalTimer) { clearTimeout(totalTimer); totalTimer = undefined; }
-            onFirstResponse = null;
+            resetIdleTimer = null;
           };
           pendingResolve = (r) => {
             cleanup();
@@ -419,18 +526,19 @@ function spawnClaude(): ClaudeProc {
             }, 5000);
             reject(new Error(TURN_TIMEOUT_ERR));
           };
-          firstResponseTimer = setTimeout(
-            () => fireTimeout("no first response in 2min"),
-            FIRST_RESPONSE_TIMEOUT_MS,
-          );
+          const armIdle = () => {
+            if (idleTimer) clearTimeout(idleTimer);
+            idleTimer = setTimeout(
+              () => fireTimeout("idle 5min — no claude events"),
+              IDLE_TIMEOUT_MS,
+            );
+          };
+          resetIdleTimer = armIdle;
+          armIdle();
           totalTimer = setTimeout(
             () => fireTimeout("total 15min"),
             TOTAL_TIMEOUT_MS,
           );
-          onFirstResponse = () => {
-            log("first response received, switching to typing phase");
-            if (firstResponseTimer) { clearTimeout(firstResponseTimer); firstResponseTimer = undefined; }
-          };
           const payload = JSON.stringify({ type: "user", message: { role: "user", content: text } }) + "\n";
           proc.stdin.write(enc.encode(payload));
         }),

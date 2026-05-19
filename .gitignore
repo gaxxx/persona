@@ -8,6 +8,7 @@ mcp-credentials/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 .mcp.json
+.mcp.local.json
 Obsidian
 
 # Per-user CLAUDE.md / CLAUDE.local.md — real files at repo root, synced
