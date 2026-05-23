@@ -295,6 +295,7 @@ const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 min
 interface PoolEntry {
   proc: ClaudeProc;
   priming: string;   // stored so exit handler can re-send on respawn
+  channelType: "dm" | "group";
   inactivityTimer: ReturnType<typeof setTimeout>;
 }
 
@@ -648,34 +649,54 @@ function resetInactivityTimer(chatId: number): void {
   entry.inactivityTimer = startInactivityTimer(chatId);
 }
 
-function attachPoolExitHandler(chatId: number, proc: ClaudeProc, priming: string): void {
+function buildPriming(chatId: number, channelType: "dm" | "group"): string {
+  if (channelType === "dm") {
+    const member = getMemberByChatId(members, chatId);
+    if (!member) return buildDmPriming({ telegram_chat_id: chatId } as Member, groupChatId);
+    return buildDmPriming(member, groupChatId);
+  }
+  return buildGroupPriming(members, chatId);
+}
+
+function attachPoolExitHandler(chatId: number): void {
+  const entry = subprocessPool.get(chatId);
+  if (!entry) return;
+  const { proc, channelType } = entry;
   proc.proc.exited.then(async () => {
-    const entry = subprocessPool.get(chatId);
-    if (!entry || entry.proc !== proc) return;
+    const currentEntry = subprocessPool.get(chatId);
+    if (!currentEntry || currentEntry.proc !== proc) return;
     log(`chat ${chatId}: proc exited, auto-respawning`);
     const newProc = spawnClaude();
     const newTimer = startInactivityTimer(chatId);
-    subprocessPool.set(chatId, { proc: newProc, priming, inactivityTimer: newTimer });
-    attachPoolExitHandler(chatId, newProc, priming);
+    const newPriming = buildPriming(chatId, channelType);
+    subprocessPool.set(chatId, { proc: newProc, priming: newPriming, channelType, inactivityTimer: newTimer });
+    attachPoolExitHandler(chatId);
     try {
-      await newProc.enqueue(priming);
+      await newProc.enqueue(newPriming);
     } catch (e) {
       log(`chat ${chatId}: auto-respawn priming failed:`, (e as Error).message);
     }
   });
 }
 
-async function ensureProc(chatId: number, priming: string): Promise<ClaudeProc> {
+async function ensureProc(chatId: number, channelType: "dm" | "group"): Promise<PoolEntry | null> {
+  if (channelType === "dm" && !getMemberByChatId(members, chatId)) {
+    log(`chat ${chatId}: DM chatId not found in member registry, skipping spawn`);
+    return null;
+  }
+
+  const priming = buildPriming(chatId, channelType);
   const entry = subprocessPool.get(chatId);
 
   if (!entry || entry.proc.isDead()) {
     if (entry) clearTimeout(entry.inactivityTimer);
     const proc = spawnClaude();
     const timer = startInactivityTimer(chatId);
-    subprocessPool.set(chatId, { proc, priming, inactivityTimer: timer });
-    attachPoolExitHandler(chatId, proc, priming);
+    const newEntry: PoolEntry = { proc, priming, channelType, inactivityTimer: timer };
+    subprocessPool.set(chatId, newEntry);
+    attachPoolExitHandler(chatId);
     await proc.enqueue(priming);
-    return proc;
+    return newEntry;
   }
 
   const { proc } = entry;
@@ -698,15 +719,16 @@ async function ensureProc(chatId: number, priming: string): Promise<ClaudeProc> 
     const oldProc = proc;
     const newProc = spawnClaude();
     const newTimer = startInactivityTimer(chatId);
-    subprocessPool.set(chatId, { proc: newProc, priming, inactivityTimer: newTimer });
-    attachPoolExitHandler(chatId, newProc, priming);
+    const newEntry: PoolEntry = { proc: newProc, priming, channelType, inactivityTimer: newTimer };
+    subprocessPool.set(chatId, newEntry);
+    attachPoolExitHandler(chatId);
     await newProc.enqueue(priming);
     oldProc.shutdown().catch((e) => log(`chat ${chatId}: old proc shutdown error:`, (e as Error).message));
-    return newProc;
+    return newEntry;
   }
 
   resetInactivityTimer(chatId);
-  return proc;
+  return entry;
 }
 
 // ---- Main loop ------------------------------------------------------------
