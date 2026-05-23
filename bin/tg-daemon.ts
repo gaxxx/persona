@@ -665,6 +665,12 @@ function attachPoolExitHandler(chatId: number): void {
   proc.proc.exited.then(async () => {
     const currentEntry = subprocessPool.get(chatId);
     if (!currentEntry || currentEntry.proc !== proc) return;
+    // If DM member was removed from registry, don't respawn
+    if (channelType === "dm" && !getMemberByChatId(members, chatId)) {
+      log(`chat ${chatId}: DM member no longer in registry, skipping auto-respawn`);
+      subprocessPool.delete(chatId);
+      return;
+    }
     log(`chat ${chatId}: proc exited, auto-respawning`);
     const newProc = spawnClaude();
     const newTimer = startInactivityTimer(chatId);
