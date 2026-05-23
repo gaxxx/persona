@@ -652,7 +652,7 @@ function resetInactivityTimer(chatId: number): void {
 function buildPriming(chatId: number, channelType: "dm" | "group"): string {
   if (channelType === "dm") {
     const member = getMemberByChatId(members, chatId);
-    if (!member) return buildDmPriming({ telegram_chat_id: chatId } as Member, groupChatId);
+    if (!member) throw new Error(`buildPriming: DM chatId ${chatId} not found in member registry`);
     return buildDmPriming(member, groupChatId);
   }
   return buildGroupPriming(members, chatId);
@@ -675,6 +675,9 @@ function attachPoolExitHandler(chatId: number): void {
       await newProc.enqueue(newPriming);
     } catch (e) {
       log(`chat ${chatId}: auto-respawn priming failed:`, (e as Error).message);
+      subprocessPool.delete(chatId);
+      clearTimeout(newTimer);
+      newProc.shutdown().catch((se) => log(`chat ${chatId}: priming-failure shutdown error:`, (se as Error).message));
     }
   });
 }
@@ -695,7 +698,15 @@ async function ensureProc(chatId: number, channelType: "dm" | "group"): Promise<
     const newEntry: PoolEntry = { proc, priming, channelType, inactivityTimer: timer };
     subprocessPool.set(chatId, newEntry);
     attachPoolExitHandler(chatId);
-    await proc.enqueue(priming);
+    try {
+      await proc.enqueue(priming);
+    } catch (e) {
+      log(`chat ${chatId}: fresh spawn priming failed:`, (e as Error).message);
+      subprocessPool.delete(chatId);
+      clearTimeout(timer);
+      proc.shutdown().catch((se) => log(`chat ${chatId}: priming-failure shutdown error:`, (se as Error).message));
+      throw e;
+    }
     return newEntry;
   }
 
@@ -722,7 +733,15 @@ async function ensureProc(chatId: number, channelType: "dm" | "group"): Promise<
     const newEntry: PoolEntry = { proc: newProc, priming, channelType, inactivityTimer: newTimer };
     subprocessPool.set(chatId, newEntry);
     attachPoolExitHandler(chatId);
-    await newProc.enqueue(priming);
+    try {
+      await newProc.enqueue(priming);
+    } catch (e) {
+      log(`chat ${chatId}: rotation priming failed:`, (e as Error).message);
+      subprocessPool.delete(chatId);
+      clearTimeout(newTimer);
+      newProc.shutdown().catch((se) => log(`chat ${chatId}: priming-failure shutdown error:`, (se as Error).message));
+      throw e;
+    }
     oldProc.shutdown().catch((e) => log(`chat ${chatId}: old proc shutdown error:`, (e as Error).message));
     return newEntry;
   }
