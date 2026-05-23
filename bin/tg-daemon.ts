@@ -946,7 +946,7 @@ async function dispatch(m: TelegramMessage, attachments: PendingAttachment[]): P
   let member: Member | undefined;
   if (channelType === "dm") {
     member = getMemberByChatId(members, chatId);
-    if (!member) { log("dispatch: no member for DM chat_id", chatId); return; }
+    if (!member) { log("dispatch: no member for DM chat_id", chatId); await sendMessage(chatId, "请联系管理员"); return; }
   } else {
     if (!m.from?.id) { log("dispatch: group message without from.id, ignoring"); return; }
     member = getMemberByUserId(members, m.from.id);
@@ -1155,6 +1155,7 @@ while (!stopping) {
     if (channelType === "dm") {
       if (!getMemberByChatId(members, m.chat.id)) {
         log("rejected: unknown DM chat_id", m.chat.id);
+        await sendMessage(m.chat.id, "请联系管理员");
         offset = u.update_id + 1; await saveOffset(); continue;
       }
     } else {
