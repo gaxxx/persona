@@ -59,6 +59,7 @@ function adminMember(): Member | undefined {
 let groupChatId: number | null = null;
 
 if (!existsSync("data")) mkdirSync("data", { recursive: true });
+log("entering poll loop");
 
 function log(...parts: unknown[]) {
   const line = `[${new Date().toISOString()}] ${parts.map((p) => (typeof p === "string" ? p : JSON.stringify(p))).join(" ")}\n`;
@@ -240,6 +241,40 @@ For typing indicators use \`bin/tg-typing.ts\`. If any tg-send / tg-send-photo /
 
 Acknowledge with the single word READY.`;
 
+function buildDmPriming(member: Member, knownGroupChatId: number | null): string {
+  const dmLogDir = `data/conversations/dm-${member.telegram_chat_id}`;
+  const profileLine = member.is_admin
+    ? `Read CLAUDE.md and <vault>/persona/USER.md to learn who your human is.`
+    : `Read CLAUDE.md and <vault>/persona/members/${member.filename} to learn about ${member.name}${member.role ? ` (${member.role})` : ""}.`;
+  const groupNote = knownGroupChatId !== null
+    ? `\nAlso read data/conversations/group-${knownGroupChatId}/<date>.md on the first turn to share context with the group channel (all context is public).`
+    : "";
+  return PRIMING
+    .replace(
+      `Read CLAUDE.md and <vault>/persona/USER.md to learn who your human is.`,
+      profileLine + groupNote,
+    )
+    .replace(/data\/conversations\/YYYY-MM-DD\.md/g, `${dmLogDir}/YYYY-MM-DD.md`);
+}
+
+function buildGroupPriming(allMembers: Member[], chatId: number): string {
+  const groupLogDir = `data/conversations/group-${chatId}`;
+  const memberList = allMembers.length > 0
+    ? allMembers.map((m) => `- ${m.name}${m.role ? ` (${m.role})` : ""}`).join("\n")
+    : "(no members registered yet)";
+  const groupHeader =
+    `You are a team assistant for a VEX IQ competition group (2026 season). Read CLAUDE.md for behavior.\n` +
+    `Team members:\n${memberList}\n` +
+    `Each turn's event JSON includes \`from_name\` (the speaker's name) and optionally \`member_role\`. ` +
+    `Use these to address them by name and tailor your response.`;
+  return PRIMING
+    .replace(
+      `You are a personal assistant running inside a long-lived daemon process. Read CLAUDE.md and <vault>/persona/USER.md to learn who your human is.`,
+      `You are a personal assistant running inside a long-lived daemon process. ${groupHeader}`,
+    )
+    .replace(/data\/conversations\/YYYY-MM-DD\.md/g, `${groupLogDir}/YYYY-MM-DD.md`);
+}
+
 interface TurnResult {
   result: string;       // assistant's final text (from result event)
   sawTgSend: boolean;   // true if any Bash tool_use with bin/tg-send fired this turn
@@ -254,6 +289,16 @@ interface ClaudeProc {
   getLastCacheRead: () => number;
   spawnedAt: number;
 }
+
+const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 min
+
+interface PoolEntry {
+  proc: ClaudeProc;
+  priming: string;   // stored so exit handler can re-send on respawn
+  inactivityTimer: ReturnType<typeof setTimeout>;
+}
+
+const subprocessPool = new Map<number, PoolEntry>();
 
 // Rotate the inner claude before context grows unbounded — context is held in
 // RAM as KV cache, and macOS will SIGKILL it under memory pressure (we got
@@ -584,71 +629,87 @@ async function saveOffset() {
   await Bun.write(OFFSET_FILE, JSON.stringify({ offset }));
 }
 
-// ---- Main loop ------------------------------------------------------------
+// ---- Subprocess pool management -------------------------------------------
 
-let claude = spawnClaude();
-attachExitHandler(claude);
-await claude.enqueue(PRIMING);
-log("priming complete, entering poll loop");
+function startInactivityTimer(chatId: number): ReturnType<typeof setTimeout> {
+  return setTimeout(() => {
+    const entry = subprocessPool.get(chatId);
+    if (!entry) return;
+    log(`chat ${chatId}: inactivity timeout, shutting down subprocess`);
+    subprocessPool.delete(chatId);
+    entry.proc.shutdown().catch((e) => log("inactivity shutdown error:", (e as Error).message));
+  }, INACTIVITY_TIMEOUT_MS);
+}
 
-// If the inner claude dies (e.g. macOS jetsam), respawn proactively instead
-// of waiting for the next Telegram event to notice. Guarded by identity check
-// so a manual rotation in the main loop doesn't trigger a double-spawn.
-function attachExitHandler(c: ClaudeProc) {
-  c.proc.exited.then(async () => {
-    if (claude !== c) return;
-    log("auto-respawning after exit");
-    claude = spawnClaude();
-    attachExitHandler(claude);
+function resetInactivityTimer(chatId: number): void {
+  const entry = subprocessPool.get(chatId);
+  if (!entry) return;
+  clearTimeout(entry.inactivityTimer);
+  entry.inactivityTimer = startInactivityTimer(chatId);
+}
+
+function attachPoolExitHandler(chatId: number, proc: ClaudeProc, priming: string): void {
+  proc.proc.exited.then(async () => {
+    const entry = subprocessPool.get(chatId);
+    if (!entry || entry.proc !== proc) return;
+    log(`chat ${chatId}: proc exited, auto-respawning`);
+    const newProc = spawnClaude();
+    const newTimer = startInactivityTimer(chatId);
+    subprocessPool.set(chatId, { proc: newProc, priming, inactivityTimer: newTimer });
+    attachPoolExitHandler(chatId, newProc, priming);
     try {
-      await claude.enqueue(PRIMING);
+      await newProc.enqueue(priming);
     } catch (e) {
-      log("auto-respawn priming failed:", (e as Error).message);
+      log(`chat ${chatId}: auto-respawn priming failed:`, (e as Error).message);
     }
   });
 }
 
-async function rotateIfNeeded() {
-  // If the proc died, respawn now. We may race with attachExitHandler — that's
-  // fine, whichever wins reassigns `claude` and the loser's identity check
-  // (`claude !== c`) makes it skip.
-  if (claude.isDead()) {
-    log("claude is dead, respawning (main loop)");
-    claude = spawnClaude();
-    attachExitHandler(claude);
-    await claude.enqueue(PRIMING);
-    return;
+async function ensureProc(chatId: number, priming: string): Promise<ClaudeProc> {
+  const entry = subprocessPool.get(chatId);
+
+  if (!entry || entry.proc.isDead()) {
+    if (entry) clearTimeout(entry.inactivityTimer);
+    const proc = spawnClaude();
+    const timer = startInactivityTimer(chatId);
+    subprocessPool.set(chatId, { proc, priming, inactivityTimer: timer });
+    attachPoolExitHandler(chatId, proc, priming);
+    await proc.enqueue(priming);
+    return proc;
   }
-  const tooOld = Date.now() - claude.spawnedAt > MAX_AGE_MS;
-  const tooMany = claude.getTurns() >= MAX_TURNS;
+
+  const { proc } = entry;
+  const tooOld = Date.now() - proc.spawnedAt > MAX_AGE_MS;
+  const tooMany = proc.getTurns() >= MAX_TURNS;
   const tooBig =
-    claude.getTurns() >= MIN_TURNS_FOR_CACHE_ROTATION &&
-    claude.getLastCacheRead() > MAX_CACHE_READ;
+    proc.getTurns() >= MIN_TURNS_FOR_CACHE_ROTATION &&
+    proc.getLastCacheRead() > MAX_CACHE_READ;
+
   if (tooOld || tooMany || tooBig) {
-    log(
-      `rotating claude: turns=${claude.getTurns()} ageMs=${Date.now() - claude.spawnedAt} cacheRead=${claude.getLastCacheRead()}`,
-    );
-    const old = claude;
-    // Flush handoff: ask the old subprocess to persist any in-RAM working
-    // state (scratchpad pending edits, in-flight reasoning) before we kill
-    // it. 30s timeout — if it hangs, proceed anyway. Without this, anything
-    // the model knew but hadn't written to disk yet is lost on rotation.
+    log(`chat ${chatId}: rotating proc (turns=${proc.getTurns()} age=${Date.now() - proc.spawnedAt}ms cache=${proc.getLastCacheRead()})`);
     try {
       await Promise.race([
-        old.enqueue(
-          "Pre-rotation flush: persist any in-flight working state to disk now (data/scratchpad.md updates, pending notes). Reply 'flushed' when done. No tg-send for this turn.",
-        ),
-        new Promise((_, rj) => setTimeout(() => rj(new Error("flush timeout")), 30_000)),
+        proc.enqueue("Pre-rotation flush: persist any in-flight working state to disk now (data/scratchpad.md updates, pending notes). Reply 'flushed' when done. No tg-send for this turn."),
+        new Promise<never>((_, rj) => setTimeout(() => rj(new Error("flush timeout")), 30_000)),
       ]);
     } catch (e) {
-      log("pre-rotation flush failed (proceeding):", (e as Error).message);
+      log(`chat ${chatId}: pre-rotation flush failed (proceeding):`, (e as Error).message);
     }
-    claude = spawnClaude();
-    attachExitHandler(claude);
-    await claude.enqueue(PRIMING);
-    old.shutdown().catch((e) => log("old claude shutdown error:", (e as Error).message));
+    const oldProc = proc;
+    const newProc = spawnClaude();
+    const newTimer = startInactivityTimer(chatId);
+    subprocessPool.set(chatId, { proc: newProc, priming, inactivityTimer: newTimer });
+    attachPoolExitHandler(chatId, newProc, priming);
+    await newProc.enqueue(priming);
+    oldProc.shutdown().catch((e) => log(`chat ${chatId}: old proc shutdown error:`, (e as Error).message));
+    return newProc;
   }
+
+  resetInactivityTimer(chatId);
+  return proc;
 }
+
+// ---- Main loop ------------------------------------------------------------
 
 // ---- Conversation log: external-write detection ---------------------------
 
@@ -657,9 +718,13 @@ async function rotateIfNeeded() {
 // next event) was written by another process — typically a cron task.
 const lastSeenLogSizes: Record<string, number> = {};
 
-function todayLogPath(): { date: string; path: string } {
+function todayChannelLog(
+  chatId: number,
+  channelType: "dm" | "group",
+): { date: string; path: string } {
   const { date } = userDateAndHm();
-  return { date, path: `data/conversations/${date}.md` };
+  const dir = `data/conversations/${channelType}-${chatId}`;
+  return { date, path: `${dir}/${date}.md` };
 }
 
 function currentLogSize(path: string): number {
@@ -669,13 +734,15 @@ function currentLogSize(path: string): number {
 // Read newly-appended bytes since last seen. Returns null if no growth or
 // if this is the first time we're seeing the date (baseline). Updates
 // lastSeenLogSizes to the current size before returning.
-function readExternalWritesSinceLastTurn(): string | null {
-  const { date, path } = todayLogPath();
+function readExternalWritesSinceLastTurn(
+  chatId: number,
+  channelType: "dm" | "group",
+): string | null {
+  const { path } = todayChannelLog(chatId, channelType);
   const size = currentLogSize(path);
-  const last = lastSeenLogSizes[date];
+  const last = lastSeenLogSizes[path];
   if (last === undefined) {
-    // First check for this date — establish baseline, no diff to report.
-    lastSeenLogSizes[date] = size;
+    lastSeenLogSizes[path] = size;
     return null;
   }
   if (size <= last) return null;
@@ -684,12 +751,13 @@ function readExternalWritesSinceLastTurn(): string | null {
     const buf = readFileSync(path);
     chunk = buf.subarray(last).toString("utf-8");
   } catch {
-    lastSeenLogSizes[date] = size;
+    lastSeenLogSizes[path] = size;
     return null;
   }
-  lastSeenLogSizes[date] = size;
+  lastSeenLogSizes[path] = size;
   if (chunk.length > MAX_EXTERNAL_WRITES_BYTES) {
-    return chunk.slice(0, MAX_EXTERNAL_WRITES_BYTES) + `\n…[TRUNCATED ${chunk.length - MAX_EXTERNAL_WRITES_BYTES} bytes — Read the file for the rest]`;
+    return chunk.slice(0, MAX_EXTERNAL_WRITES_BYTES) +
+      `\n…[TRUNCATED ${chunk.length - MAX_EXTERNAL_WRITES_BYTES} bytes — Read the file for the rest]`;
   }
   return chunk || null;
 }
@@ -697,9 +765,9 @@ function readExternalWritesSinceLastTurn(): string | null {
 // Mark current log size as fully consumed. Call after claude finishes a
 // turn so its own writes (incoming + outgoing logging) don't get re-flagged
 // as external on the next turn.
-function noteLogConsumed(): void {
-  const { date, path } = todayLogPath();
-  lastSeenLogSizes[date] = currentLogSize(path);
+function noteLogConsumed(chatId: number, channelType: "dm" | "group"): void {
+  const { path } = todayChannelLog(chatId, channelType);
+  lastSeenLogSizes[path] = currentLogSize(path);
 }
 
 // Extract the list of currently-active thread slugs from data/scratchpad.md.
@@ -919,7 +987,12 @@ const stop = async (sig: string) => {
   if (stopping) return;
   stopping = true;
   log("received", sig, "shutting down");
-  await claude.shutdown();
+  const shutdowns = [...subprocessPool.values()].map((entry) => {
+    clearTimeout(entry.inactivityTimer);
+    return entry.proc.shutdown();
+  });
+  await Promise.allSettled(shutdowns);
+  subprocessPool.clear();
   await saveOffset();
   process.exit(0);
 };
