@@ -873,7 +873,7 @@ async function downloadAttachment(m: TelegramMessage): Promise<PendingAttachment
 
 // Short-circuit handler for `/stats` — runs daemon-stats.ts and replies
 // directly, bypassing the inner claude (saves an LLM turn).
-async function handleStatsCommand(chatId: number): Promise<void> {
+async function handleStatsCommand(chatId: number, channelType: "dm" | "group"): Promise<void> {
   const proc = Bun.spawn(["bun", "run", "bin/daemon-stats.ts"], {
     stdout: "pipe",
     stderr: "pipe",
@@ -881,31 +881,115 @@ async function handleStatsCommand(chatId: number): Promise<void> {
   const out = await new Response(proc.stdout).text();
   await proc.exited;
   const body = out.trim() || "(no output)";
-  // Wrap in triple-backticks so the markdown→HTML converter in lib/telegram
-  // renders this as a <pre><code> block (monospaced, lines preserved).
   await sendMessage(chatId, "```\n" + body + "\n```");
-  // Log both halves so the conversation file stays consistent.
-  const { date, hm } = userDateAndHm();
-  const logPath = `data/conversations/${date}.md`;
-  if (!existsSync("data/conversations")) mkdirSync("data/conversations", { recursive: true });
-  appendFileSync(
-    logPath,
-    `\n[${hm}] user: /stats\n[${hm}] bot: ${body.replace(/\n/g, " | ")}\n`,
-  );
-  // Reset baseline so the inner claude doesn't see our writes as "external"
-  // on its next turn.
-  noteLogConsumed();
+  const { hm } = userDateAndHm();
+  const { path: logPath } = todayChannelLog(chatId, channelType);
+  const logDir = `data/conversations/${channelType}-${chatId}`;
+  if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
+  appendFileSync(logPath, `\n[${hm}] user: /stats\n[${hm}] bot: ${body.replace(/\n/g, " | ")}\n`);
+  noteLogConsumed(chatId, channelType);
+}
+
+async function handleAdminCommand(text: string, chatId: number): Promise<boolean> {
+  const trim = text.trim();
+
+  if (trim === "/list_members") {
+    const lines = ["Members:"];
+    for (const m of members) {
+      const s = getQuotaStatus(m.telegram_chat_id, m);
+      const limitStr = s.limit === null ? "∞" : String(s.limit);
+      lines.push(`• ${m.name}${m.role ? ` [${m.role}]` : ""}${m.is_admin ? " (admin)" : ""}: ${s.count}/${limitStr} msgs today`);
+    }
+    await sendMessage(chatId, lines.join("\n"));
+    return true;
+  }
+
+  const quotaMatch = trim.match(/^\/quota\s+(\S+)$/i);
+  if (quotaMatch) {
+    const query = quotaMatch[1].toLowerCase();
+    const member = members.find(
+      (m) => m.name.toLowerCase() === query || m.filename.replace(".md", "").toLowerCase() === query,
+    );
+    if (!member) {
+      await sendMessage(chatId, `Member "${quotaMatch[1]}" not found.`);
+    } else {
+      const s = getQuotaStatus(member.telegram_chat_id, member);
+      const limitStr = s.limit === null ? "unlimited" : String(s.limit);
+      await sendMessage(chatId, `${member.name}: ${s.count}/${limitStr} messages today`);
+    }
+    return true;
+  }
+
+  const resetMatch = trim.match(/^\/reset_quota\s+(\S+)$/i);
+  if (resetMatch) {
+    const query = resetMatch[1].toLowerCase();
+    const member = members.find(
+      (m) => m.name.toLowerCase() === query || m.filename.replace(".md", "").toLowerCase() === query,
+    );
+    if (!member) {
+      await sendMessage(chatId, `Member "${resetMatch[1]}" not found.`);
+    } else {
+      resetQuota(member.telegram_chat_id);
+      await sendMessage(chatId, `✓ Reset ${member.name}'s daily quota`);
+    }
+    return true;
+  }
+
+  return false;
 }
 
 async function dispatch(m: TelegramMessage, attachments: PendingAttachment[]): Promise<void> {
-  await rotateIfNeeded();
-  // Short-circuit `/stats` (and only `/stats` — no args, no attachments) to
-  // avoid burning an inner-claude turn on a deterministic readout.
+  const chatId = m.chat.id;
+  const channelType: "dm" | "group" = m.chat.type === "private" ? "dm" : "group";
+
+  // Resolve member identity
+  let member: Member | undefined;
+  if (channelType === "dm") {
+    member = getMemberByChatId(members, chatId);
+    if (!member) { log("dispatch: no member for DM chat_id", chatId); return; }
+  } else {
+    if (m.from?.id) member = getMemberByUserId(members, m.from.id);
+    // Unknown group sender: silently ignore (already filtered in poll loop)
+  }
+
+  // Admin commands (DM from admin only, before quota check)
+  if (channelType === "dm" && member?.is_admin) {
+    const text = (m.text ?? "").trim();
+    if (
+      text === "/list_members" ||
+      text.startsWith("/quota ") ||
+      text.startsWith("/reset_quota ")
+    ) {
+      await handleAdminCommand(text, chatId);
+      return;
+    }
+  }
+
+  // Stats short-circuit (all users)
   if ((m.text ?? "").trim() === "/stats" && attachments.length === 0) {
     log("dispatch: /stats short-circuit");
-    await handleStatsCommand(m.chat.id);
+    await handleStatsCommand(chatId, channelType);
     return;
   }
+
+  // DM quota check
+  if (channelType === "dm" && member) {
+    const quota = checkAndIncrementQuota(chatId, member);
+    if (!quota.allowed) {
+      await sendMessage(
+        chatId,
+        "You've reached your daily message limit. Resets tomorrow. You can still ask me in the group channel anytime 🙏",
+      );
+      return;
+    }
+  }
+
+  // Get or spawn the subprocess for this channel
+  const entry = await ensureProc(chatId, channelType);
+  if (!entry) { log("dispatch: ensureProc returned null for chatId", chatId); return; }
+  const proc = entry.proc;
+
+  // Build event JSON, injecting member identity for group messages
   let replyTo;
   if (m.reply_to_message) {
     const r = m.reply_to_message;
@@ -923,7 +1007,8 @@ async function dispatch(m: TelegramMessage, attachments: PendingAttachment[]): P
     ? `[${first.kind}${attachments.length > 1 ? ` x${attachments.length}` : ""}]`
     : "";
   const event: Record<string, unknown> = {
-    chat_id: m.chat.id,
+    chat_id: chatId,
+    channel: channelType,
     from: m.from
       ? `${m.from.first_name}${m.from.username ? ` (@${m.from.username})` : ""}`
       : "unknown",
@@ -932,55 +1017,49 @@ async function dispatch(m: TelegramMessage, attachments: PendingAttachment[]): P
     date: new Date(m.date * 1000).toISOString(),
     message_id: m.message_id,
   };
+  if (channelType === "group" && member) {
+    event.from_name = member.name;
+    if (member.role) event.member_role = member.role;
+  }
   if (attachments.length === 1) event.attachment = attachments[0];
   else if (attachments.length > 1) event.attachments = attachments;
-  const externalWrites = readExternalWritesSinceLastTurn();
+
+  const externalWrites = readExternalWritesSinceLastTurn(chatId, channelType);
   if (externalWrites) event.external_writes_since_last_turn = externalWrites;
   const activeThreads = readActiveThreadSlugs();
   if (activeThreads.length > 0) event.active_threads = activeThreads;
+
   log("-> telegram event", event);
-  sendTyping(m.chat.id).catch(() => {});
-  const typingTimer = setInterval(() => { sendTyping(m.chat.id).catch(() => {}); }, 4000);
+  sendTyping(chatId).catch(() => {});
+  const typingTimer = setInterval(() => { sendTyping(chatId).catch(() => {}); }, 4000);
+
   try {
-    const turnResult = await claude.enqueue(`[Telegram event] ${JSON.stringify(event)}`);
+    const turnResult = await proc.enqueue(`[Telegram event] ${JSON.stringify(event)}`);
     if (AUTH_ERROR_PATTERN.test(turnResult.result)) {
-      log("auth failure detected in result, killing subprocess to force respawn");
-      sendMessage(m.chat.id, "🚨 我的身份验证过期了，正在重启子进程。几秒后再发一次就行～")
+      log("auth failure detected, killing subprocess for chat", chatId);
+      sendMessage(chatId, "🚨 Auth expired, restarting subprocess. Resend in a moment~")
         .catch((e) => log("auth-alert send failed:", (e as Error).message));
-      try { claude.proc.kill(); } catch {}
-      // attachExitHandler spawns a fresh subprocess that reads current creds.
+      try { proc.proc.kill(); } catch {}
       return;
     }
-    // Auto-send the model's final text if it didn't already call tg-send
-    // (or tg-send-photo) during the turn. This is the default reply path —
-    // the model only needs to call tg-send.ts explicitly for split messages,
-    // photos, or pre-tool messages. Aligns with the model's natural prior
-    // ("what I write is what the user sees") instead of fighting it.
     if (!turnResult.sawTgSend && turnResult.result.trim()) {
       try {
-        await sendMessage(m.chat.id, turnResult.result);
-        // Daemon owns the bot-line log entry too in this case, since the
-        // model didn't go through its usual reply path. We don't write the
-        // user line — the model handles that on first turn per SKILL.md.
-        const { date, hm } = userDateAndHm();
-        const logPath = `data/conversations/${date}.md`;
-        if (!existsSync("data/conversations")) mkdirSync("data/conversations", { recursive: true });
-        appendFileSync(
-          logPath,
-          `[${hm}] bot: ${turnResult.result.replace(/\n/g, " | ")}\n`,
-        );
+        await sendMessage(chatId, turnResult.result);
+        const { hm } = userDateAndHm();
+        const { path: logPath } = todayChannelLog(chatId, channelType);
+        const logDir = `data/conversations/${channelType}-${chatId}`;
+        if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
+        appendFileSync(logPath, `[${hm}] bot: ${turnResult.result.replace(/\n/g, " | ")}\n`);
       } catch (e) {
         log("auto-send failed:", (e as Error).message);
       }
     }
-    // After claude's turn (incl. its own log writes), reset baseline so its
-    // writes don't get re-flagged as external on the next turn.
-    noteLogConsumed();
+    noteLogConsumed(chatId, channelType);
   } catch (err) {
     const e = err as Error;
     log("enqueue failed:", e.message);
     if (e.message === TURN_TIMEOUT_ERR) {
-      sendMessage(m.chat.id, "我处理这条消息卡住了 😔 重发一遍或者换个说法试试？")
+      sendMessage(chatId, "处理这条消息卡住了 😔 重发一遍或者换个说法试试？")
         .catch((se) => log("apology send failed:", (se as Error).message));
     }
   } finally {
