@@ -1,7 +1,7 @@
 services:
   persona:
     build: .
-    container_name: persona
+    container_name: persona-vex
     # No env_file — Compose auto-reads .env from cwd for ${VAR} substitution.
     # setup.sh is the canonical entry point and guarantees .env is populated.
     # The ${VAR:?msg} syntax fails compose with a clear message if you try to
