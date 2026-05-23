@@ -948,19 +948,20 @@ async function dispatch(m: TelegramMessage, attachments: PendingAttachment[]): P
     member = getMemberByChatId(members, chatId);
     if (!member) { log("dispatch: no member for DM chat_id", chatId); return; }
   } else {
-    if (m.from?.id) member = getMemberByUserId(members, m.from.id);
-    // Unknown group sender: silently ignore (already filtered in poll loop)
+    if (!m.from?.id) { log("dispatch: group message without from.id, ignoring"); return; }
+    member = getMemberByUserId(members, m.from.id);
+    if (!member) { log("dispatch: unknown group sender", m.from.id); return; }
   }
 
   // Admin commands (DM from admin only, before quota check)
-  if (channelType === "dm" && member?.is_admin) {
+  if (channelType === "dm" && member?.is_admin && (m.text ?? "").trim().startsWith("/")) {
     const text = (m.text ?? "").trim();
-    if (
-      text === "/list_members" ||
-      text.startsWith("/quota ") ||
-      text.startsWith("/reset_quota ")
-    ) {
-      await handleAdminCommand(text, chatId);
+    // Don't intercept /stats — it's handled below for all users
+    if (text !== "/stats") {
+      const handled = await handleAdminCommand(text, chatId);
+      if (!handled) {
+        await sendMessage(chatId, "Usage:\n/list_members\n/quota <name>\n/reset_quota <name>");
+      }
       return;
     }
   }
