@@ -1,5 +1,4 @@
-import { readdirSync, readFileSync } from "fs";
-import { watch } from "fs";
+import { readdirSync, readFileSync, watch } from "fs";
 import { join } from "path";
 
 export interface Member {
@@ -27,7 +26,7 @@ function parseFrontmatter(content: string): { meta: Record<string, unknown>; bod
     const m = line.match(/^([\w]+):\s*(.+)$/);
     if (m) {
       const val = m[2].trim();
-      meta[m[1]] = isNaN(Number(val)) ? val : Number(val);
+      meta[m[1]] = val === "" || isNaN(Number(val)) ? val : Number(val);
     }
   }
   return { meta, body: body.trim() };

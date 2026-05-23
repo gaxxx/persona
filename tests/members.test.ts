@@ -83,6 +83,16 @@ describe("loadMembers", () => {
     writeFileSync(`${TEST_VAULT}/persona/members/readme.txt`, "ignore me");
     expect(loadMembers()).toHaveLength(0);
   });
+
+  test("treats whitespace-only frontmatter value as string not number", () => {
+    writeFileSync(
+      `${TEST_VAULT}/persona/members/ws.md`,
+      `---\nname: WS\ntelegram_chat_id: 111\ntelegram_user_id: 222\nrole: \n---`,
+    );
+    const [m] = loadMembers();
+    // role should be the trimmed string "" or undefined, NOT the number 0
+    expect(typeof m.role).not.toBe("number");
+  });
 });
 
 describe("getMemberByChatId", () => {
