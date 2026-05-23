@@ -19,6 +19,8 @@ import { registerSession } from "./lib/session-registry";
 import { userDateAndHm } from "./lib/user-tz";
 import { mkdirSync, existsSync, appendFileSync, statSync, readFileSync, writeFileSync } from "fs";
 import type { Subprocess } from "bun";
+import { loadMembers, getMemberByChatId, getMemberByUserId, getAdmin, watchMembers, type Member } from "./lib/members";
+import { checkAndIncrementQuota, resetQuota, getQuotaStatus } from "./lib/quota";
 
 const OFFSET_FILE = "data/tg-offset.json";
 const LOG_FILE = "data/daemon.log";
@@ -39,21 +41,22 @@ const MCP_STATUS_PATH = "data/mcp-status.json";
 // can re-read the file if needed (the truncated marker is unmistakable).
 const MAX_EXTERNAL_WRITES_BYTES = 4096;
 
-// Allowlist: only accept messages from these chat IDs. Set TELEGRAM_CHAT_ID
-// (single id) or TELEGRAM_CHAT_IDS (comma-separated). Empty = reject everything.
-// `||` (not `??`) so empty string (set by docker-compose's `${VAR:-}` pattern)
-// falls through to the next option instead of being treated as "set".
-const ALLOWED_CHAT_IDS = new Set(
-  (process.env.TELEGRAM_CHAT_IDS || process.env.TELEGRAM_CHAT_ID || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map(Number),
-);
-if (ALLOWED_CHAT_IDS.size === 0) {
-  console.error("FATAL: TELEGRAM_CHAT_ID (or TELEGRAM_CHAT_IDS) is not set. Refusing to start without a chat allowlist.");
-  process.exit(1);
+// Member registry — loaded from vault/persona/members/*.md. Hot-reloads on change.
+let members: Member[] = loadMembers();
+watchMembers(() => {
+  members = loadMembers();
+  log(`members reloaded: ${members.map((m) => m.name).join(", ") || "(none)"}`);
+});
+
+// The admin member (admin.md). Used for rate-limit notifications and admin commands.
+// Falls back to first member if no admin.md exists.
+function adminMember(): Member | undefined {
+  return getAdmin(members) ?? members[0];
 }
+
+// Track the group chat_id once we see the first group message. Used to inject
+// group log path into DM subprocess PRIMINGs so they can load shared context.
+let groupChatId: number | null = null;
 
 if (!existsSync("data")) mkdirSync("data", { recursive: true });
 
@@ -264,10 +267,6 @@ const MAX_AGE_MS = 8 * 60 * 60 * 1000;
 const MAX_CACHE_READ = 600_000;
 const MIN_TURNS_FOR_CACHE_ROTATION = 5;
 
-// Primary chat id (used by graceful rate-limit notifications below). First
-// allowed chat id is the one we ping with system notices.
-const PRIMARY_CHAT_ID = [...ALLOWED_CHAT_IDS][0];
-
 // Rate-limit notification de-dup state. Each 5-hour or monthly window has a
 // unique `resetsAt` (unix seconds); we send at most one warning + one
 // rejection per window so we don't spam the user.
@@ -294,8 +293,10 @@ async function notifyRateLimitWarning(utilization: number, resetsAtSec: number) 
   lastWarningResetsAt = resetsAtSec;
   log(`rate-limit warning: utilization=${(utilization * 100).toFixed(0)}% resetsAt=${new Date(resetsAtSec * 1000).toISOString()}`);
   try {
+    const adminId = adminMember()?.telegram_chat_id;
+    if (!adminId) return;
     await sendMessage(
-      PRIMARY_CHAT_ID,
+      adminId,
       `🐉 我快用完这个 5 小时窗口的 token 配额了（${Math.round(utilization * 100)}%）。${formatResetTime(resetsAtSec)} ET 之前可能慢点回复，但还在哦～`,
     );
   } catch (e) { log("warning notify failed:", (e as Error).message); }
@@ -306,8 +307,10 @@ async function notifyRateLimitRejected(resetsAtSec: number) {
   lastRejectionResetsAt = resetsAtSec;
   log(`rate-limit REJECTED, resetsAt=${new Date(resetsAtSec * 1000).toISOString()}`);
   try {
+    const adminId = adminMember()?.telegram_chat_id;
+    if (!adminId) return;
     await sendMessage(
-      PRIMARY_CHAT_ID,
+      adminId,
       `⏸ 我刚刚 token 用完了，要等 ${formatResetTime(resetsAtSec)} ET 配额刷新才能继续帮你。先休息一下哦～ 💤`,
     );
   } catch (e) { log("rejected notify failed:", (e as Error).message); }
@@ -947,9 +950,20 @@ while (!stopping) {
     // We still advance the offset for these so unauthorized senders / edited
     // messages / etc. can't backlog us.
     if (!m) { offset = u.update_id + 1; await saveOffset(); continue; }
-    if (!ALLOWED_CHAT_IDS.has(m.chat.id)) {
-      log("rejected: chat_id", m.chat.id, "from", m.from?.username ?? m.from?.first_name ?? "?");
-      offset = u.update_id + 1; await saveOffset(); continue;
+    // Reject messages from unknown chats/users.
+    const channelType = m.chat.type === "private" ? "dm" : "group";
+    if (channelType === "dm") {
+      if (!getMemberByChatId(members, m.chat.id)) {
+        log("rejected: unknown DM chat_id", m.chat.id);
+        offset = u.update_id + 1; await saveOffset(); continue;
+      }
+    } else {
+      // For group messages, track the group chat_id and check the sender.
+      groupChatId = m.chat.id;
+      if (m.from?.id && !getMemberByUserId(members, m.from.id)) {
+        log("rejected: unknown user_id in group", m.from?.id);
+        offset = u.update_id + 1; await saveOffset(); continue;
+      }
     }
     const hasPhoto = !!(m.photo && m.photo.length > 0);
     const hasDoc = !!m.document;
