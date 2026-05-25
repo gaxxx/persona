@@ -20,6 +20,16 @@ ENV PATH="/home/bun/.local/bin:${PATH}"
 # Claude Code CLI - native binary install for the bun user.
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
+# tmux config — route alt-screen apps (claude code, vim, less, htop) through
+# the main buffer so mouse wheel / Ctrl-b PgUp scrolls back through their
+# output. Mirrors the host's ~/.tmux.conf.
+RUN printf '%s\n%s\n%s\n%s\n' \
+    "# Make alt-screen apps write into tmux's main scrollback" \
+    "set -g terminal-overrides ',xterm*:smcup@:rmcup@'" \
+    "" \
+    "set -g mouse on" \
+    > /home/bun/.tmux.conf
+
 WORKDIR /workspace
 # Auto-start: bin/entrypoint.sh spawns the watchdog (which supervises the
 # tg/cron daemons), then execs tmux + claude /assistant-loop.
