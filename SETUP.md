@@ -13,7 +13,7 @@ Three independent processes talk to a shared filesystem + persona:
 
 Skills are split into two layers:
 - **Shared** (committed in this repo at `.claude/skills/`): `assistant-loop`, `assistant-test`, `kb` interface stub, `onboarding`. Tracked by git per `.gitignore` exception list.
-- **Personal** (gitignored): `kb-impl` (your knowledge-base implementation), plus anything else like `game-time`, `ds160`, etc. They live as real directories under `.claude/skills/<name>/` in the repo, and are mirrored to `<vault>/persona/.claude/skills/` via `bin/pbackup.sh` / `bin/pstore.sh` (a `Stop` hook auto-pushes after every Claude Code session).
+- **Personal** (gitignored): `kb-impl` (your knowledge-base implementation), plus anything else like `game-time`, `ds160`, etc. They live as real directories under `.claude/skills/<name>/` in the repo, and are mirrored to `<vault>/persona/.claude/skills/` via `bin/pbackup.sh` / `bin/prestore.sh` (a `Stop` hook auto-pushes after every Claude Code session).
 
 ## Prerequisites
 
@@ -54,7 +54,7 @@ cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/persona/.claude/skills/kb-
 # This is a flat-folder starter. Read it, customize, or replace with PARA / Logseq / etc.
 
 # 3. Sync personal files (CLAUDE.md, personal skills) between repo and vault
-bash bin/pstore.sh   # vault -> repo  (after fresh clone)
+bash bin/prestore.sh   # vault -> repo  (after fresh clone)
 # bash bin/pbackup.sh  # repo -> vault (after edits; Stop hook does this automatically)
 
 # 4. Add scheduled tasks (optional)
@@ -83,12 +83,12 @@ docker compose exec persona tmux attach -t loop   # attach (Ctrl-B D to detach)
 | Personal skills (repo, gitignored) | `.claude/skills/<name>/` | `kb-impl`, plus anything you write | no |
 | Personal skills (vault backup) | `<vault>/persona/.claude/skills/<name>/` | mirror of above | yes (vault is yours) |
 
-`setup.sh` lives at the repo root, so it works the moment you `git clone`. Shared skills are committed directly into `.claude/skills/` (per `.gitignore` exception list) and need no install step. Personal skills + `CLAUDE.md` (+ optional `CLAUDE.local.md`) are gitignored real files synced with the vault via `bin/pbackup.sh` / `bin/pstore.sh`:
+`setup.sh` lives at the repo root, so it works the moment you `git clone`. Shared skills are committed directly into `.claude/skills/` (per `.gitignore` exception list) and need no install step. Personal skills + `CLAUDE.md` (+ optional `CLAUDE.local.md`) are gitignored real files synced with the vault via `bin/pbackup.sh` / `bin/prestore.sh`:
 
-- **`pstore`** copies `<vault>/persona/CLAUDE.md` and personal-skill dirs INTO the repo. Run after a fresh clone or when restoring local state.
+- **`prestore`** copies `<vault>/persona/CLAUDE.md` and personal-skill dirs INTO the repo. Run after a fresh clone or when restoring local state.
 - **`pbackup`** copies the same files OUT of the repo into the vault. A `Stop` hook in `.claude/settings.local.json` runs this automatically after every Claude Code session.
 
-Vault is canonical; on drift, `pstore` wins.
+Vault is canonical; on drift, `prestore` wins.
 
 ## kb interface vs implementation
 
@@ -134,7 +134,7 @@ repo/
 │   ├── tg-send.ts / tg-typing.ts
 │   ├── cron-daemon.ts          # scheduled-task daemon
 │   ├── watchdog.sh             # bash supervisor
-│   ├── pbackup.sh / pstore.sh  # sync personal files (CLAUDE.md + personal skills) with vault
+│   ├── pbackup.sh / prestore.sh  # sync personal files (CLAUDE.md + personal skills) with vault
 │   └── ...
 ├── .claude/
 │   ├── commands/                # tracked Claude Code slash commands (if any)
@@ -180,4 +180,4 @@ docker compose exec persona bash                   # ad-hoc shell (don't open an
 - **Cron tasks rejected with "TELEGRAM_CHAT_ID not set"** - bin scripts enforce a chat allowlist; ensure `.env` has `TELEGRAM_CHAT_ID=<your-id>` (or `TELEGRAM_CHAT_IDS=id1,id2` for multi-user).
 - **Vault writes don't show up in Obsidian** - Google Drive bind-mounts on macOS sometimes lag a few seconds. Force-sync the Drive client or wait.
 - **MCP OAuth errors** - claude.ai connectors (Gmail, Calendar, Notion) re-auth via the container's `~/.claude/`. Run `docker compose exec persona claude` interactively to refresh the session.
-- **`/kb <subcmd>` says "implementation not installed"** - run `cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/persona/.claude/skills/kb-impl"`, then `bash bin/pstore.sh` to mirror it back into the repo.
+- **`/kb <subcmd>` says "implementation not installed"** - run `cp -r .claude/skills/kb/examples/minimal "$VAULT_PATH/persona/.claude/skills/kb-impl"`, then `bash bin/prestore.sh` to mirror it back into the repo.

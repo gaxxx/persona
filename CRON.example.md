@@ -2,7 +2,7 @@
 
 Source of truth for recurring tasks. `bin/cron-daemon.ts` parses each `## <id>` section, schedules by its `Cron:` expression, and on fire spawns either `claude -p` (for `**Prompt:**` entries) or `sh -c` (for `**Shell:**` entries — no LLM, ~free). Auto-reloads on file change (fs.watch). cron-daemon stamps the `Last run` line itself using the script's final stdout line as a 1-line summary. Use `Shell:` for deterministic wrapper-script invocations; use `Prompt:` only when the LLM's judgment is needed (compose, classify, summarize). Tasks should NOT update CRON.md themselves.
 
-*This is the example template. Setup copies it into `<vault>/persona/CRON.md` (the path `bin/cron-daemon.ts` reads via `$VAULT_PATH`). No repo-root copy needed — `CLAUDE.md` is the only file Claude Code auto-loads from cwd, and it's synced via `bin/pbackup.sh` / `pstore.sh`. Edit `<vault>/persona/CRON.md` directly.*
+*This is the example template. Setup copies it into `<vault>/persona/CRON.md` (the path `bin/cron-daemon.ts` reads via `$VAULT_PATH`). No repo-root copy needed — `CLAUDE.md` is the only file Claude Code auto-loads from cwd, and it's synced via `bin/pbackup.sh` / `prestore.sh`. Edit `<vault>/persona/CRON.md` directly.*
 
 ## example-task
 

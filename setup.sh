@@ -165,7 +165,7 @@ if grep -q "^- \*\*Language:\*\* not set" "$VAULT_PATH/persona/USER.md"; then
   ' "$VAULT_PATH/persona/USER.md" > "$tmp" && mv "$tmp" "$VAULT_PATH/persona/USER.md"
 fi
 
-# Repo-root CLAUDE.md (gitignored real file, synced via pbackup/pstore)
+# Repo-root CLAUDE.md (gitignored real file, synced via pbackup/prestore)
 [ -f CLAUDE.md ] || cp CLAUDE.example.md CLAUDE.md
 
 # kb-impl: simple starter now, or roll your own later
@@ -186,7 +186,7 @@ if [ ! -d "$VAULT_PATH/persona/.claude/skills/kb-impl" ] && [ ! -d ".claude/skil
 fi
 
 # Pull any existing personal skills / CLAUDE.md from vault into repo
-bash bin/pstore.sh > /dev/null 2>&1 || true
+bash bin/prestore.sh > /dev/null 2>&1 || true
 echo "  ✓ $(t "vault 完成" "vault ready")"
 
 # ============ Claude Code model ============

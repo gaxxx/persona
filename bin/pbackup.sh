@@ -1,6 +1,6 @@
 #!/bin/bash
 # Back up gitignored personal files to the vault so they survive instance
-# migrations / re-clones. Mirror image: bin/pstore.sh.
+# migrations / re-clones. Mirror image: bin/prestore.sh.
 #
 # Scope:
 #   - personal skills under .claude/skills/<name>/  (those NOT in SHARED_SKILLS,

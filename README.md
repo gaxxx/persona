@@ -66,7 +66,7 @@ The interesting design is the layering. Five places you can extend without forki
 | **Personal** | `.claude/skills/<name>/` (gitignored, mirrored to `<vault>/persona/.claude/skills/`) | Bound to your life: `game-time`, `uscis-check`, perf-review notes, etc. |
 | **kb-impl** | `<vault>/persona/.claude/skills/kb-impl/` | The one skill that implements the `/kb` contract. Replace freely. |
 
-Personal skills auto-sync between repo and vault via `bin/pbackup.sh` (Stop hook, runs after every Claude Code session) and `bin/pstore.sh` (manual, vault → repo). The vault is source-of-truth; the repo is a working copy. Don't commit personal skills.
+Personal skills auto-sync between repo and vault via `bin/pbackup.sh` (Stop hook, runs after every Claude Code session) and `bin/prestore.sh` (manual, vault → repo). The vault is source-of-truth; the repo is a working copy. Don't commit personal skills.
 
 ### 3. `CRON.md` — `Prompt:` vs `Shell:`
 
@@ -83,7 +83,7 @@ Copy `.mcp.example.json` to `.mcp.json` (gitignored) and add your servers. stdio
 
 ### 5. Personality & identity
 
-`<vault>/persona/IDENTITY.md`, `USER.md`, and the top-level `CLAUDE.md` are the levers for tone, language, quiet hours, memory rules. Onboarding fills the first two; the rest you tweak by hand. CLAUDE.md in particular is gitignored and synced via pbackup/pstore, so each user has their own without forking the repo.
+`<vault>/persona/IDENTITY.md`, `USER.md`, and the top-level `CLAUDE.md` are the levers for tone, language, quiet hours, memory rules. Onboarding fills the first two; the rest you tweak by hand. CLAUDE.md in particular is gitignored and synced via pbackup/prestore, so each user has their own without forking the repo.
 
 ## Design choices
 
