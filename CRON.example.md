@@ -39,6 +39,20 @@ Source of truth for recurring tasks. `bin/cron-daemon.ts` parses each `## <id>` 
 
 ---
 
+## daily-journal
+
+- **Cron:** `0 22 * * *` (every day at 10pm local)
+- **Durable:** true
+- **Purpose:** Read today's conversation log + Google Calendar + Gmail, compose a daily journal entry in `<vault>/kb/areas/journal/` (language matches the user's messages), and send a Telegram digest.
+- **Last run:** never
+- **Shell:**
+
+  ```
+  bun run bin/daily-journal.ts
+  ```
+
+---
+
 ## How registration works
 
 `bin/cron-daemon.ts` is a long-running process that owns scheduling:

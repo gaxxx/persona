@@ -4,8 +4,11 @@
 #
 # Scope:
 #   - personal skills (any skill in vault that's not in SHARED_SKILLS)
-#   - CLAUDE.md, CLAUDE.local.md
+#   - CLAUDE.local.md (optional personal overrides, if present in vault)
 #   - mcp-credentials/ (gmail oauth tokens etc — watchdog symlinks into $HOME)
+#
+# NOT in scope:
+#   - CLAUDE.md — now tracked in git, restored via git pull
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -42,13 +45,12 @@ if [ -d "$VAULT_SKILLS" ]; then
   done
 fi
 
-# CLAUDE.md / CLAUDE.local.md
-for f in CLAUDE.md CLAUDE.local.md; do
-  src="$VAULT_PERSONA/$f"
-  [ -f "$src" ] || continue
-  cp "$src" "$f"
-  restored+=("$f")
-done
+# CLAUDE.local.md (personal overrides only — CLAUDE.md is now in git)
+src="$VAULT_PERSONA/CLAUDE.local.md"
+if [ -f "$src" ]; then
+  cp "$src" CLAUDE.local.md
+  restored+=("CLAUDE.local.md")
+fi
 
 # MCP credentials
 if [ -d "$VAULT_PERSONA/mcp-credentials" ]; then
@@ -58,7 +60,7 @@ if [ -d "$VAULT_PERSONA/mcp-credentials" ]; then
 fi
 
 if [ "${#restored[@]}" -eq 0 ]; then
-  echo "nothing to restore (vault has no personal skills or CLAUDE files)"
+  echo "nothing to restore (vault has no personal skills or CLAUDE.local.md)"
 else
   echo "restored from $VAULT_PERSONA: ${restored[*]}"
 fi

@@ -5,12 +5,12 @@
 # Scope:
 #   - personal skills under .claude/skills/<name>/  (those NOT in SHARED_SKILLS,
 #     which are committed to git per .gitignore exception list)
-#   - CLAUDE.md (real file at repo root)
-#   - CLAUDE.local.md (optional personal-overrides split)
+#   - CLAUDE.local.md (optional personal-overrides split, if present)
 #   - mcp-credentials/ (gmail oauth tokens etc — watchdog symlinks into $HOME)
 #
-# NOT in scope (lives in vault directly, no repo copy):
-#   - USER.md, IDENTITY.md, MEMORY.md, tasks.md, CRON.md
+# NOT in scope:
+#   - CLAUDE.md — now tracked in git, no vault copy needed
+#   - USER.md, IDENTITY.md, MEMORY.md, tasks.md, CRON.md (live in vault directly)
 #   - daemon runtime state under data/
 
 set -euo pipefail
@@ -49,13 +49,11 @@ for dir in .claude/skills/*/; do
   backed_up+=("skill:$name")
 done
 
-# CLAUDE.md / CLAUDE.local.md
-for f in CLAUDE.md CLAUDE.local.md; do
-  if [ -f "$f" ]; then
-    cp "$f" "$VAULT_PERSONA/$f"
-    backed_up+=("$f")
-  fi
-done
+# CLAUDE.local.md (personal overrides only — CLAUDE.md is now in git)
+if [ -f "CLAUDE.local.md" ]; then
+  cp CLAUDE.local.md "$VAULT_PERSONA/CLAUDE.local.md"
+  backed_up+=("CLAUDE.local.md")
+fi
 
 # MCP credentials — see watchdog's link_mcp_credentials(). Refresh tokens are
 # long-lived (months/years for Google OAuth), so a backup stays usable even
