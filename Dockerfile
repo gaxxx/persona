@@ -26,8 +26,6 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 RUN printf '%s\n%s\n%s\n%s\n' \
     "# Make alt-screen apps write into tmux's main scrollback" \
     "set -g terminal-overrides ',xterm*:smcup@:rmcup@'" \
-    "" \
-    "set -g mouse on" \
     > /home/bun/.tmux.conf
 
 WORKDIR /workspace
