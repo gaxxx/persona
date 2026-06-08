@@ -9,6 +9,9 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
+    "@vladmandic/human": "^3.3.6",
+    "face-api.js": "^0.22.2",
+    "sharp": "^0.34.5",
     "sqlite-vec": "^0.1.9"
   }
 }

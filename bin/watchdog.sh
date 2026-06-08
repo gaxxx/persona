@@ -96,21 +96,55 @@ acquire_watchdog_lock() {
   trap 'rm -f "$WATCHDOG_PIDFILE"' EXIT
 }
 
+# List PIDs of all processes whose argv is exactly `bun run <script>` OR
+# `bun run <abs-path>/<script>`. Exact match (not regex contains) so that
+# bash wrappers whose argv embeds the script name in an `eval`/`-c` string
+# don't false-positive. Handles both relative invocations (started by this
+# watchdog from REPO_ROOT) and absolute invocations (started by ad-hoc
+# `nohup bun run /workspace/bin/tg-daemon.ts` commands).
+list_daemon_pids() {
+  local script="$1" pid rest
+  while read -r pid rest; do
+    case "$rest" in
+      "bun run $script") echo "$pid" ;;
+      "bun run "*"/$script") echo "$pid" ;;
+    esac
+  done < <(ps -eo pid=,args=)
+}
+
 # Sweep orphan daemons before we own the lifecycle. Without this, a previous
 # watchdog's daemons can survive as PPID=1 orphans (e.g., if old watchdog was
 # pkilled but daemons stayed up via nohup+disown). This watchdog would then
 # spawn duplicates that fight over Telegram getUpdates.
 sweep_orphans() {
-  local killed=0
+  local killed=0 script pid
   for script in bin/tg-daemon.ts bin/cron-daemon.ts; do
     while read -r pid; do
       [ -z "$pid" ] && continue
       log "sweeping orphan $script (pid=$pid)"
       kill "$pid" 2>/dev/null || true
       killed=1
-    done < <(ps -eo pid=,args= | awk -v s="$script" '$0 ~ ("[b]un run " s) {print $1}')
+    done < <(list_daemon_pids "$script")
   done
   [ "$killed" = 1 ] && sleep 1 || true
+}
+
+# Per-cycle duplicate killer. sweep_orphans only runs on startup, so if a
+# duplicate daemon appears later (manual `nohup bun run bin/tg-daemon.ts`,
+# leftover from a previous watchdog process that didn't clean up, etc.), the
+# watchdog's is_alive check passes (pidfile PID is alive) and never notices
+# the duplicates. The result: N daemons all polling Telegram → user gets N
+# replies per message. Keep only the pidfile-tracked PID; kill the rest.
+kill_duplicates() {
+  local pidfile="$1" script="$2" tracked pid
+  tracked=$(cat "$pidfile" 2>/dev/null)
+  [ -n "$tracked" ] || return 0
+  while read -r pid; do
+    [ -z "$pid" ] && continue
+    [ "$pid" = "$tracked" ] && continue
+    log "killing duplicate $script (pid=$pid, tracked=$tracked)"
+    kill "$pid" 2>/dev/null || true
+  done < <(list_daemon_pids "$script")
 }
 
 # Skip the singleton + sweep when running `--once` (which is meant to be
@@ -156,12 +190,11 @@ is_alive() {
 
 # First-tick recovery: if a daemon is running but no pidfile exists
 # (e.g., started manually before the watchdog came up), adopt its PID
-# instead of spawning a duplicate. The [b]racket trick keeps the search
-# command itself out of the match set.
+# instead of spawning a duplicate.
 adopt_existing() {
   local pidfile="$1" script="$2" pid
   [ -f "$pidfile" ] && return 0
-  pid=$(ps -eo pid=,args= | awk -v s="$script" '$0 ~ ("[b]un run " s) {print $1; exit}')
+  pid=$(list_daemon_pids "$script" | head -n 1)
   if [ -n "$pid" ]; then
     echo "$pid" > "$pidfile"
     log "adopted existing $script (pid=$pid)"
@@ -211,10 +244,13 @@ check_once() {
     [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
     start_tg_daemon
   fi
+  kill_duplicates "$TG_PIDFILE" "bin/tg-daemon.ts"
+
   if ! is_alive "$CRON_PIDFILE" "bin/cron-daemon.ts"; then
     notify "⏰ cron-daemon was down, restarting"
     start_cron_daemon
   fi
+  kill_duplicates "$CRON_PIDFILE" "bin/cron-daemon.ts"
 }
 
 trap "log 'received SIGTERM, exiting'; exit 0" SIGTERM SIGINT
