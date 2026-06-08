@@ -1,6 +1,6 @@
 ---
 name: kb
-description: Personal knowledge base operations - interface only. Required ops are put/query/lint; any other subcommand (ingest, plan, clip, improve, ...) is implementation-defined and lives in the user's vault under persona/.claude/skills/kb-impl/.
+description: Personal knowledge base — the entry point for storing and querying the user's data (finance, family, health, housing, education, work). Fires on "/kb", "what's my", "look up", "find in wiki", "查一下", "save this to kb", any question about personal data, or another skill persisting an artifact. Defines the put/query/lint contract; routes impl-specific subcommands (ingest, compile, plan, clip, improve) to kb-impl.
 ---
 
 # kb - Knowledge Base Interface

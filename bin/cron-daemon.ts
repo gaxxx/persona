@@ -45,6 +45,12 @@ interface Task {
   // tasks (watchdogs, wrapper-script invocations) where claude adds no value.
   kind: "prompt" | "shell";
   body: string;
+  // Model tier for "prompt" tasks (haiku|sonnet|opus). Cron fires are
+  // templated/script-driven and rarely need Opus, so prompt tasks default to
+  // sonnet (~1/5 Opus cost). Override per-task with `- **Model:** opus` for
+  // composition that needs the strongest model, or `haiku` for pure
+  // script-relay tasks. Undefined for shell tasks (no LLM).
+  model?: string;
 }
 
 function parseTaskMd(content: string): Task[] {
@@ -76,7 +82,13 @@ function parseTaskMd(content: string): Task[] {
     const fenceMatch = after.match(/```\s*\n?([\s\S]*?)\n?\s*```/);
     if (!fenceMatch) continue;
     const taskBody = fenceMatch[1].trim();
-    tasks.push({ id, cron: cronMatch[1].trim(), kind, body: taskBody });
+    // Optional `- **Model:** haiku|sonnet|opus` line. Prompt tasks default to
+    // sonnet; shell tasks ignore it (no LLM).
+    const modelMatch = body.match(/^- \*\*Model:\*\*\s*`?(haiku|sonnet|opus)`?/im);
+    const model = kind === "prompt"
+      ? (modelMatch ? modelMatch[1].toLowerCase() : "sonnet")
+      : undefined;
+    tasks.push({ id, cron: cronMatch[1].trim(), kind, body: taskBody, model });
   }
   return tasks;
 }
@@ -167,6 +179,13 @@ function scheduleNext(s: Scheduled) {
 
 const RUN_LOG_DIR = resolve(ROOT, "data/cron-runs");
 
+// Hard cap on a single fire. A hung subprocess (e.g. a `claude -p` wedged on a
+// stuck MCP/auth call) would otherwise keep s.running=true forever and freeze
+// ALL future fires of that task, since scheduleNext() only runs after
+// proc.exited resolves. On timeout we SIGKILL the subprocess so .exited
+// resolves and the schedule self-heals. Override with CRON_FIRE_TIMEOUT_MS.
+const FIRE_TIMEOUT_MS = Number(process.env.CRON_FIRE_TIMEOUT_MS) || 5 * 60 * 1000;
+
 // Update "## <taskId>" section's "- **Last run:**" line in CRON.md.
 // Suffix is appended after the timestamp ("— ..."). Empty suffix → just the timestamp.
 function updateCronLastRun(taskId: string, suffix: string): void {
@@ -218,7 +237,8 @@ async function fireTask(s: Scheduled) {
     childEnv.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
     const cmd = s.task.kind === "shell"
       ? ["sh", "-c", s.task.body]
-      : ["claude", "-p", s.task.body, "--permission-mode", "bypassPermissions"];
+      : ["claude", "-p", s.task.body, "--permission-mode", "bypassPermissions",
+         ...(s.task.model ? ["--model", s.task.model] : [])];
     const proc = Bun.spawn(cmd, {
       cwd: ROOT,
       env: childEnv,
@@ -226,7 +246,19 @@ async function fireTask(s: Scheduled) {
       stderr: Bun.file(stderrPath),
       stdin: "ignore",
     });
-    const [exitCode] = await Promise.all([proc.exited]);
+    let timedOut = false;
+    const killTimer = setTimeout(() => {
+      timedOut = true;
+      log(
+        `TIMEOUT ${s.task.id}: exceeded ${Math.round(FIRE_TIMEOUT_MS / 1000)}s` +
+          ` — SIGKILL pid ${proc.pid}`
+      );
+      try {
+        proc.kill(9);
+      } catch {}
+    }, FIRE_TIMEOUT_MS);
+    const exitCode = await proc.exited;
+    clearTimeout(killTimer);
     const elapsed = ((Date.now() - start) / 1000).toFixed(1);
     // Tail of stdout (last ~400 chars) into cron.log for quick scanning.
     let tail = "";
@@ -243,7 +275,7 @@ async function fireTask(s: Scheduled) {
       updateCronLastRun(s.task.id, lastLine.slice(0, 200));
     }
     log(
-      `done ${s.task.id} exit=${exitCode} in ${elapsed}s` +
+      `done ${s.task.id} exit=${exitCode}${timedOut ? " (TIMED OUT)" : ""} in ${elapsed}s` +
         ` -- log:${stdoutPath}` +
         (tail ? `\n  tail: ${tail.replace(/\n/g, "\n        ")}` : "")
     );

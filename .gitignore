@@ -27,3 +27,6 @@ CLAUDE.local.md
 # Editor swap files
 *.swp
 *.swo
+
+bisync.log
+.claude/settings.json

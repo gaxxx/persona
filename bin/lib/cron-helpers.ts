@@ -37,6 +37,7 @@ export function etDateAndHm(): { date: string; hm: string } {
 export async function runClaude(
   prompt: string,
   timeoutMs = 5 * 60 * 1000,
+  model?: string,
 ): Promise<string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
@@ -44,7 +45,14 @@ export async function runClaude(
     if (typeof v === "string") env[k] = v;
   }
   const proc = Bun.spawn(
-    ["claude", "-p", prompt, "--permission-mode", "bypassPermissions"],
+    [
+      "claude",
+      "-p",
+      prompt,
+      "--permission-mode",
+      "bypassPermissions",
+      ...(model ? ["--model", model] : []),
+    ],
     {
       cwd: ROOT,
       env,

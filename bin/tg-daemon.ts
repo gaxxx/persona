@@ -23,6 +23,12 @@ import type { Subprocess } from "bun";
 const OFFSET_FILE = "data/tg-offset.json";
 const LOG_FILE = "data/daemon.log";
 const HEARTBEAT_FILE = "data/tg-daemon-heartbeat";
+// While a turn is actively running, stamp the heartbeat on this interval even
+// if claude emits no stdout events (e.g. the model is silently reading a huge
+// image/PDF for minutes). Process alive + turn in flight = actively working, so
+// the watchdog must not mistake event-silence for a stuck daemon. A genuinely
+// stuck turn is still caught by the in-process idle/total timeouts below.
+const TURN_HEARTBEAT_MS = 30_000;
 const LONG_POLL_TIMEOUT = 25;
 
 // MCP per-server status cache, authoritative source = claude's system/init
@@ -500,9 +506,11 @@ function spawnClaude(): ClaudeProc {
           lastAssistantText = "";
           let idleTimer: ReturnType<typeof setTimeout> | undefined;
           let totalTimer: ReturnType<typeof setTimeout> | undefined;
+          let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
           const cleanup = () => {
             if (idleTimer) { clearTimeout(idleTimer); idleTimer = undefined; }
             if (totalTimer) { clearTimeout(totalTimer); totalTimer = undefined; }
+            if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = undefined; }
             resetIdleTimer = null;
           };
           pendingResolve = (r) => {
@@ -539,6 +547,12 @@ function spawnClaude(): ClaudeProc {
             () => fireTimeout("total 15min"),
             TOTAL_TIMEOUT_MS,
           );
+          // Keep the heartbeat fresh for the whole turn, independent of stdout
+          // events — silence during a long single tool call (huge image read)
+          // no longer reads as "stuck" to the watchdog.
+          heartbeatTimer = setInterval(() => {
+            try { writeFileSync(HEARTBEAT_FILE, new Date().toISOString()); } catch {}
+          }, TURN_HEARTBEAT_MS);
           const payload = JSON.stringify({ type: "user", message: { role: "user", content: text } }) + "\n";
           proc.stdin.write(enc.encode(payload));
         }),
@@ -939,8 +953,9 @@ while (!stopping) {
     continue;
   }
 
-  for (const u of updates) {
+  for (let i = 0; i < updates.length; i++) {
     if (stopping) break;
+    const u = updates[i];
     const m = u.message;
 
     // Skip non-message updates, unauthorized chats, and content-less messages.
@@ -968,6 +983,35 @@ while (!stopping) {
       // Advance offset on buffer (not on dispatch). Accepts a small loss
       // window if killed during the 800ms debounce; keeps the loop moving.
       offset = u.update_id + 1; await saveOffset();
+      continue;
+    }
+
+    // Batch-merge (plan "B"): when the user fires off several plain-text
+    // messages in quick succession they arrive together in one getUpdates
+    // batch — or, because the loop blocks on `await dispatch` for the whole
+    // turn, they pile up and collapse into the *next* batch while a turn is
+    // running. Either way we greedily fold consecutive same-chat_id text
+    // messages into ONE turn, so the model replies once instead of per line.
+    // Zero added latency: we only merge what Telegram already handed us in
+    // this batch. Attachments, media groups, slash-commands, and replies
+    // break the run so they each keep their own turn/context.
+    if (m.text && !att && !m.text.startsWith("/")) {
+      let mergedText = m.text;
+      let lastIdx = i;
+      let mergedCount = 1;
+      while (i + 1 < updates.length && mergedCount < 20) {
+        const nm = updates[i + 1].message;
+        if (!nm || nm.chat.id !== m.chat.id) break;
+        if (!nm.text || nm.reply_to_message || nm.text.startsWith("/")) break;
+        if ((nm.photo && nm.photo.length > 0) || nm.document || nm.sticker || nm.media_group_id) break;
+        mergedText += "\n" + nm.text;
+        i++; lastIdx = i; mergedCount++;
+      }
+      if (mergedCount > 1) log(`batch-merged ${mergedCount} text msgs from chat ${m.chat.id}`);
+      const merged = mergedCount > 1 ? { ...m, text: mergedText } : m;
+      await dispatch(merged, []);
+      offset = updates[lastIdx].update_id + 1;
+      await saveOffset();
       continue;
     }
 

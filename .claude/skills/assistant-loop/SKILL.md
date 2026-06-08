@@ -29,40 +29,9 @@ The assistant has **three long-running components** plus an optional REPL:
 
 When in doubt, prefer one channel - the one that originated the request.
 
-## Daemon - On Telegram Event
+## Daemon — On Telegram Event
 
-The daemon feeds the claude subprocess one user turn per Telegram event. Event shape:
-
-```json
-{ "chat_id": ..., "from": "...", "text": "...",
-  "attachment": { "kind": "photo|document|sticker", "path": "data/attachments/...", "name": ..., "mime": ... } | undefined,
-  "reply_to": { "message_id": ..., "from_bot": bool, "text": "...", "attachment_kind": ..., "attachment_name": ... } | undefined,
-  "date": "...", "message_id": ... }
-```
-
-Steps when handling an event:
-
-1. Send typing indicator: `bun run bin/tg-typing.ts <chat_id>`
-2. **Log incoming** - append to `data/conversations/YYYY-MM-DD.md`.
-3. **Load conversation context** (lazy — the daemon's PRIMING enforces this):
-   - **First turn after subprocess spawn**: read today's conversation file. If <10K chars include all; otherwise summarize older days and keep today verbatim. Also read `data/scratchpad.md` (see step 3a).
-   - **Subsequent turns**: do NOT re-read by default — your in-context memory of prior turns covers it. Re-read only when (a) the user references past events ("yesterday" / "earlier" / "我之前说过" / "上次"), (b) `reply_to.from_bot=true`, or (c) the event JSON contains an `external_writes_since_last_turn` field — that's the daemon telling you a cron task (or another process) wrote to the log between your turns; treat the field's content as already-read context, no Read needed (unless it ends with a TRUNCATED marker).
-   - **Trivial messages** (greetings like "你好" / "thanks" / "👍", or USER.md-derivable questions like "我在哪个时区"): skip the log entirely, even on the first turn.
-3a. **Discussion scratchpad** (`data/scratchpad.md`): multi-thread working-memory keeping the frame (criteria, candidates, exclusions, leaning) of each open discussion alive across subprocess rotations and topic switches. Full spec lives in the daemon PRIMING; the rules in brief:
-   - **Structure**: `## Active` / `## Deferred` / `## Recently decided`. Each thread is `### thread: <slug>` with **Touched:**, **Constraints:** (⚠️ prefix for hard non-negotiables), **Candidates:**, **Status:**.
-   - **Caps**: ≤8 threads total, ≤5 active, ~400 chars/thread, <5KB file. Recently-decided ages out after 24h → `data/decisions-log.md`.
-   - **Load** on first turn after spawn alongside the conversation log.
-   - **Re-read** on every multi-turn decision turn before composing reply. Honor ⚠️ lines — don't contradict your own constraints.
-   - **Update** on frame-change turns only (new constraint / candidate / decision / deferral / new topic). Decisions move to `## Recently decided`; deferrals to `## Deferred`; new topics ADD a new thread (never overwrite).
-   - Skip entirely for one-shot or trivial messages.
-4. **If `attachment` set** - Read it via the Read tool (Read supports images and PDFs natively).
-5. **If `reply_to` set** - Use as context for what the user is responding to. If `reply_to.from_bot` is true, find that earlier message in `data/conversations/` for full context. If the replied-to had an attachment, look in `data/attachments/<reply_to.message_id>.*`.
-6. If onboarding not done (`USER.md` has "not set" fields) -> run onboarding flow.
-7. **Check available skills and MCP tools.** Pick the best fit, or reply directly if none applies.
-8. Send: `bun run bin/tg-send.ts <chat_id> "<response>"`
-9. **Log outgoing** - append to today's conversation file.
-
-The daemon **only** owns Telegram. It does NOT start a Monitor, does NOT call `bin/tg-pull.ts`, and does NOT register crons.
+The tg-daemon feeds its inner `claude` subprocess one user turn per Telegram event (typing → log → lazy-load context + scratchpad → handle attachment/reply → route to skill → send → log). The daemon's own PRIMING enforces this at runtime; the `/assistant-loop` REPL never executes it. Full event-shape + step-by-step contract: read `references/daemon-telegram-event.md`.
 
 ## Main REPL — `/assistant-loop` (one-shot)
 
@@ -119,56 +88,11 @@ The main REPL does **not** poll Telegram (tg-daemon owns that), does **not** sch
 
 ## Upcoming Preview (soft reminders)
 
-A cron task `upcoming-1h-preview` fires every 20 min and pings Telegram for events about to happen. Goal: ONE notification per event, ~15-30 min lead, never spam, respect quiet hours.
-
-**Procedure** (run by the cron-fired `claude -p` subprocess):
-
-1. **Time gate** — Get current local time: `date '+%Y-%m-%dT%H:%M %z'`. Read user's quiet hours from `<vault>/persona/USER.md` (default 23:30-08:00 local). If inside quiet window, skip step 6 (Telegram send) UNLESS the event itself starts inside this same quiet window. Logging/dedup still proceed.
-
-2. **Window** — `[now, now + 30min]`. Anything outside the window is ignored. (30min lead matches typical leave-the-house buffer; smaller window means we never ping too early.)
-
-3. **Dedup state** — Read `data/upcoming-notified.json` (shape: `{ "<event-key>": "<ISO-sent-at>" }`). Create `{}` if missing. Prune entries whose sent-at is > 24h old, write back.
-
-4. **Gather candidates** in the window:
-   - **Google Calendar** via `mcp__claude_ai_Google_Calendar__list_events` (or whichever calendar MCP is wired) with `timeMin=now`, `timeMax=now+30min`. Key = `gcal:<event.id>`.
-   - **tasks.md** — `<vault>/persona/tasks.md`, `- [ ]` lines with `📅 YYYY-MM-DD` = today AND a parseable time (`15:00`, `下午3点`, `3pm`, etc.) whose computed start falls in the window. Key = `task:<first 12 chars of sha1(line)>`.
-   - Skip any candidate whose key is already in dedup state.
-
-5. **Per-event lead override** — If the event title/description (calendar) or task line (tasks.md) contains `lead:Nmin` or `lead:Nh` (e.g. `lead:45min`), use N instead of 30 for that event. Only matters if N > 30 — those events get matched in earlier ticks because we widen step 4 to `now + max(30, lead)` minutes when scanning. Default 30 is fine for most.
-
-6. **Send** — If 0 new candidates → exit silently (no "nothing upcoming" pings). Otherwise compose ONE Telegram message:
-   - Format per event: `🔔 ~Nmin: <title> [@ <location-or-context>]`
-   - Multiple events: one line each, single send via `bun run bin/tg-send.ts <CHAT_ID> "<msg>"` (chat_id from `<vault>/persona/USER.md`).
-
-7. **Persist** — Add each fired event key to `data/upcoming-notified.json` with current ISO timestamp. Write back.
-
-8. **Log** — Append `[HH:MM] bot: <msg>` to today's `data/conversations/YYYY-MM-DD.md`.
-
-9. **Final stdout line** — print a 1-line summary as the LAST line of stdout, e.g. `2 events` or `silent`. cron-daemon stamps that into the `Last run:` line of CRON.md automatically (don't edit CRON.md yourself).
-
-**Tuning**: window/lead defaults live here, not CRON.md. Change in this file when you want to adjust behavior.
+The `upcoming-1h-preview` cron task (every 20 min) pings Telegram once per imminent event (~30 min lead) from Google Calendar + tasks.md, deduped via `data/upcoming-notified.json`, respecting quiet hours. It runs in the cron subprocess, not this REPL. Full procedure + tuning (window, lead overrides, dedup, quiet-hours gate): read `references/upcoming-preview.md`. The CRON.md prompt also points there.
 
 ## How cron tasks run (background)
 
-The main REPL does NOT see cron fires anymore - they run in independent processes spawned by cron-daemon. Each cron entry in `CRON.md`:
-
-- cron-daemon sets a `setTimeout` to its next fire time
-- on fire, cron-daemon spawns `claude -p --permission-mode bypassPermissions <prompt>` with cwd=repo root and inherited env
-- that subprocess does the work (reads CLAUDE.md, hits MCPs, sends Telegram per the prompt) and exits
-- cron-daemon logs the fire to `data/cron.log`, then on exit-0 stamps the task's `- **Last run:**` line in CRON.md with the current timestamp + the subprocess's final stdout line as a 1-line summary (truncated to 200 chars). Failed tasks (non-zero exit) leave Last run untouched so the gap is visible.
-- Then reschedules.
-
-If you edit `CRON.md` (add/remove tasks, change cron expression, change prompt), cron-daemon's fs.watch picks it up automatically (500ms debounce). No restart needed. Last run lines (whether daemon-written or hand-set) are preserved across reloads — cron-daemon only reads `Cron:` and `Prompt:` at schedule time.
-
-Cron task prompts should print a terse 1-line summary as their final stdout line (the daemon uses it as the Last-run suffix). They should NOT edit CRON.md themselves.
-
-**Two ways to write a cron task**:
-
-1. **Inline prompt**: the `Prompt:` block in CRON.md is the full instruction; cron-daemon spawns `claude -p` directly with it. Best for simple, low-state, occasional tasks.
-
-2. **Deterministic wrapper script** (preferred for repeated/stateful tasks like gmail-digest, daily-journal): write `bin/<task>.ts` that owns the stateful parts (file I/O, dedup, tg-send) and only shells out to `claude -p` for the LLM-only parts (classify, summarize, compose). The CRON.md prompt then becomes a one-liner: ``Run `bun run bin/<task>.ts` and report the final stdout line.`` Shared utilities live in `bin/lib/cron-helpers.ts` (etIsoNow, runClaude, extractJson, tgSend, logToConversation).
-
-The wrapper pattern keeps state machines deterministic and makes failures debuggable as plain script errors, while still using the model where judgment is needed.
+The REPL does not see cron fires — cron-daemon spawns an independent `claude -p` per task from CRON.md, stamps the `Last run:` line on exit, and hot-reloads CRON.md on change. Tasks can be inline prompts or deterministic `bin/<task>.ts` wrappers. Full mechanics + the wrapper pattern: read `references/cron-mechanics.md`.
 
 ## Onboarding (first-time setup)
 

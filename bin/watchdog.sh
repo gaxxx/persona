@@ -168,13 +168,50 @@ adopt_existing() {
   fi
 }
 
+# Singleton-guard kill, used before (re)spawning. We must NOT use
+# `pkill -f "bin/<name>.ts"`: that substring also matches any `claude -p`
+# whose *prompt text* mentions the daemon path (the assistant routinely
+# discusses its own source), so a careless pkill could murder a live turn.
+# Instead match the exact `bun run <script>` command we spawn — mirroring
+# adopt_existing()'s [b]un-run anchoring — and additionally skip any
+# process whose executable is `claude` and our own watchdog PID.
+kill_daemon() {
+  local script="$1" pid comm rest
+  ps -eo pid=,comm=,args= | while read -r pid comm rest; do
+    case " $rest " in
+      *"bun run $script"*)
+        [ "$comm" = "claude" ] && continue
+        [ "$pid" = "$$" ] && continue
+        kill "$pid" 2>/dev/null ;;
+    esac
+  done
+  return 0
+}
+
 start_tg_daemon() {
-  nohup bun run bin/tg-daemon.ts > /tmp/tg-daemon-stderr.log 2>&1 &
+  # `env -u TELEGRAM_CHAT_IDS`: in Docker, compose injects an *empty*
+  # TELEGRAM_CHAT_IDS (compose line `${TELEGRAM_CHAT_IDS:-}`) into the
+  # container env, and a set-but-empty var shadows the populated value in
+  # .env (bun: real env > .env). Unsetting it here lets bun read the real
+  # comma-separated list (Siyun + kids) from .env. Harmless on host / after
+  # a clean recreation — bun then just reads the same value from .env.
+  # Singleton guard: kill any pre-existing tg-daemon before spawning so a
+  # watchdog *restart* (a fresh watchdog can't see the old watchdog's pidfile)
+  # can never leave two daemons polling Telegram → duplicate replies.
+  # kill_daemon() matches `bun run bin/tg-daemon.ts` exactly, so it won't
+  # touch a cron `claude -p` that merely mentions the path in its prompt.
+  kill_daemon "bin/tg-daemon.ts"; sleep 1
+  nohup env -u TELEGRAM_CHAT_IDS bun run bin/tg-daemon.ts > /tmp/tg-daemon-stderr.log 2>&1 &
   echo $! > "$TG_PIDFILE"
   disown
 }
 
 start_cron_daemon() {
+  # Singleton guard (see start_tg_daemon). Without this, a watchdog restart
+  # leaves the old cron-daemon orphaned-but-alive → two daemons fire every
+  # task twice (seen 2026-05-30: two daily-journals at 22:02 / 22:05 after the
+  # 21:42 respawn). This is the kill-before-respawn step CRON.md prescribes.
+  kill_daemon "bin/cron-daemon.ts"; sleep 1
   nohup bun run bin/cron-daemon.ts > /tmp/cron-daemon-stderr.log 2>&1 &
   echo $! > "$CRON_PIDFILE"
   disown
