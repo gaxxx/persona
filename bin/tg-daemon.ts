@@ -407,7 +407,7 @@ function spawnClaude(): ClaudeProc {
         // Refresh heartbeat on every claude event — a long but actively
         // progressing turn (multi-tool research, etc.) keeps the watchdog
         // satisfied. Only true silence means stuck.
-        try { writeFileSync(HEARTBEAT_FILE, new Date().toISOString()); } catch {}
+        try { writeFileSync(HEARTBEAT_FILE, new Date().toISOString()); } catch (e) { log("heartbeat write failed:", (e as Error).message); }
         // Reset idle timeout: any event from claude means the turn is alive.
         resetIdleTimer?.();
         log("claude:", line);
@@ -551,7 +551,7 @@ function spawnClaude(): ClaudeProc {
           // events — silence during a long single tool call (huge image read)
           // no longer reads as "stuck" to the watchdog.
           heartbeatTimer = setInterval(() => {
-            try { writeFileSync(HEARTBEAT_FILE, new Date().toISOString()); } catch {}
+            try { writeFileSync(HEARTBEAT_FILE, new Date().toISOString()); } catch (e) { log("heartbeat write failed:", (e as Error).message); }
           }, TURN_HEARTBEAT_MS);
           const payload = JSON.stringify({ type: "user", message: { role: "user", content: text } }) + "\n";
           proc.stdin.write(enc.encode(payload));
@@ -608,6 +608,7 @@ log("priming complete, entering poll loop");
 function attachExitHandler(c: ClaudeProc) {
   c.proc.exited.then(async () => {
     if (claude !== c) return;
+    if (stopping) { log("skipping auto-respawn: daemon is shutting down"); return; }
     log("auto-respawning after exit");
     claude = spawnClaude();
     attachExitHandler(claude);
@@ -942,7 +943,7 @@ while (!stopping) {
   // dispatch (downloadAttachment / inner-claude turn) hangs, this file
   // stops aging — watchdog uses staleness to detect a wedged loop and
   // silently respawn us.
-  try { writeFileSync(HEARTBEAT_FILE, new Date().toISOString()); } catch {}
+  try { writeFileSync(HEARTBEAT_FILE, new Date().toISOString()); } catch (e) { log("heartbeat write failed:", (e as Error).message); }
 
   let updates;
   try {
