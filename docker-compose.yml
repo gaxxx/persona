@@ -2,21 +2,25 @@ services:
   persona:
     build: .
     container_name: persona
-    # No env_file — Compose auto-reads .env from cwd for ${VAR} substitution.
-    # setup.sh is the canonical entry point and guarantees .env is populated.
-    # The ${VAR:?msg} syntax fails compose with a clear message if you try to
-    # bypass setup.sh.
+    # All of .env is loaded into the container (Telegram, API/model provider,
+    # Voyage, TZ, …) — add a key to .env and it's available here with no edit.
+    # NOTE: .env must NOT contain a host-only PATH line; env_file would expand it
+    # to the host's PATH (macOS dirs that don't exist in the Linux container).
+    # Host PATH for bun lives in watchdog.sh / resume.sh instead, not .env.
+    env_file: .env
+    # environment: overrides env_file for the same key — used here only for vars
+    # that must differ from .env (VAULT_PATH) or aren't in .env (locale), plus a
+    # ${VAR:?} guard that fails compose with a clear message if setup.sh hasn't run.
     environment:
-      - TZ=${TZ:-America/New_York}
+      # Inside the container the vault is always /vault, never the host path.
+      - VAULT_PATH=/vault
       # UTF-8 locale so tmux/bash render Chinese (and any non-ASCII) correctly.
       # C.UTF-8 is installed in the base image; LC_ALL pins it past inheriting POSIX.
       - LANG=C.UTF-8
       - LC_ALL=C.UTF-8
-      # Inside the container the vault is always /vault.
-      - VAULT_PATH=/vault
+      - TZ=${TZ:-America/New_York}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:?run ./setup.sh first}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:?run ./setup.sh first}
-      - TELEGRAM_CHAT_IDS=${TELEGRAM_CHAT_IDS:-}
     volumes:
       # Repo (read-write - assistant edits CLAUDE.md, conversations log, etc.)
       - .:/workspace

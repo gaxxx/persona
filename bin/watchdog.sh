@@ -29,8 +29,11 @@ cd "$REPO_ROOT"
 # CHAT_ID lookup below) see the right vars regardless of how we were
 # started. Skip in Docker — compose's env_file already loaded everything,
 # and host .env would clobber the in-container VAULT_PATH=/vault.
+# PATH is host-only and intentionally NOT in .env (env_file would inject the
+# host's PATH into the container), so put bun on PATH here for spawned daemons.
 if [ ! -f /.dockerenv ] && [ -f .env ]; then
   set -a; . ./.env; set +a
+  export PATH="$HOME/.bun/bin:$PATH"
 fi
 
 # Self-wrap with a pseudoterminal if our session has no controlling TTY.
@@ -60,6 +63,7 @@ PIDDIR="$REPO_ROOT/data"
 mkdir -p "$PIDDIR"
 TG_PIDFILE="$PIDDIR/tg-daemon.pid"
 CRON_PIDFILE="$PIDDIR/cron-daemon.pid"
+ROUTER_PIDFILE="$PIDDIR/router.pid"
 TG_HEARTBEAT="$PIDDIR/tg-daemon-heartbeat"
 WATCHDOG_PIDFILE="$PIDDIR/watchdog.pid"
 # Stuck-loop threshold. tg-daemon stamps the heartbeat at the top of each
@@ -102,7 +106,7 @@ acquire_watchdog_lock() {
 # spawn duplicates that fight over Telegram getUpdates.
 sweep_orphans() {
   local killed=0
-  for script in bin/tg-daemon.ts bin/cron-daemon.ts; do
+  for script in bin/tg-daemon.ts bin/cron-daemon.ts bin/anthropic-router.ts; do
     while read -r pid; do
       [ -z "$pid" ] && continue
       log "sweeping orphan $script (pid=$pid)"
@@ -217,6 +221,13 @@ start_cron_daemon() {
   disown
 }
 
+start_router() {
+  kill_daemon "bin/anthropic-router.ts"; sleep 1
+  nohup bun run bin/anthropic-router.ts > /tmp/router-stderr.log 2>&1 &
+  echo $! > "$ROUTER_PIDFILE"
+  disown
+}
+
 is_heartbeat_fresh() {
   [ -f "$TG_HEARTBEAT" ] || return 1
   local mtime now age
@@ -233,6 +244,7 @@ check_once() {
   link_mcp_credentials
   adopt_existing "$TG_PIDFILE" "bin/tg-daemon.ts"
   adopt_existing "$CRON_PIDFILE" "bin/cron-daemon.ts"
+  adopt_existing "$ROUTER_PIDFILE" "bin/anthropic-router.ts"
 
   if ! is_alive "$TG_PIDFILE" "bin/tg-daemon.ts"; then
     # Process actually died — operator should know.
@@ -251,6 +263,10 @@ check_once() {
   if ! is_alive "$CRON_PIDFILE" "bin/cron-daemon.ts"; then
     notify "⏰ cron-daemon was down, restarting"
     start_cron_daemon
+  fi
+  if ! is_alive "$ROUTER_PIDFILE" "bin/anthropic-router.ts"; then
+    log "🔀 router was down, restarting"
+    start_router
   fi
 }
 

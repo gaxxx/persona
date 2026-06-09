@@ -8,6 +8,36 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# ============ fast path: change one key, keep the rest ============
+# `./setup.sh --vault [PATH]` repoints VAULT_PATH only — no Telegram re-validation,
+# no other prompts. Every other line in .env is left untouched. PATH is optional;
+# if omitted you're prompted (defaulting to the current value).
+if [ "${1:-}" = "--vault" ]; then
+  [ -f .env ] && { set -a; . ./.env; set +a; }
+  default_vault="${VAULT_PATH:-./Obsidian}"
+  if [ -n "${2:-}" ]; then
+    vault_in="$2"
+  else
+    read -rp "Obsidian vault path [$default_vault]: " vault_in
+    vault_in="${vault_in:-$default_vault}"
+  fi
+  mkdir -p "$vault_in"
+  new_vault=$(cd "$vault_in" && pwd)
+  touch .env
+  if grep -qE '^VAULT_PATH=' .env; then
+    tmp=$(mktemp)
+    awk -v v="\"$new_vault\"" '/^VAULT_PATH=/{print "VAULT_PATH="v; next} {print}' .env > "$tmp" && mv "$tmp" .env
+  else
+    printf 'VAULT_PATH="%s"\n' "$new_vault" >> .env
+  fi
+  echo "✓ VAULT_PATH = $new_vault"
+  echo "  (all other .env values untouched)"
+  if [ ! -f "$new_vault/persona/CLAUDE.md" ]; then
+    echo "  ! this vault has no persona/ skeleton yet — run ./setup.sh (full) once to populate it"
+  fi
+  exit 0
+fi
+
 # ============ language ============
 LANG_CODE=""
 while [ -z "$LANG_CODE" ]; do
@@ -121,6 +151,96 @@ while true; do
   echo "  ✗ $(t "未知时区，请用 IANA 格式（例: Asia/Shanghai, Europe/London, America/Los_Angeles）" "unknown TZ — use IANA format (e.g., Asia/Shanghai, Europe/London, America/Los_Angeles)")"
 done
 
+# ============ API / model provider ============
+# Three ways to feed Claude Code:
+#   1) OAuth        — `claude /login`, a Claude subscription. No key in .env.
+#   2) Anthropic API key — official api.anthropic.com, billed per token.
+#   3) OpenRouter router — bin/anthropic-router.ts (watchdog-supervised) rewrites
+#      each request's model by content: text → text model, image → vision model.
+# Only the router splits vision/text — Anthropic's own models are unified
+# multimodal, so options 1 & 2 use one model for both.
+echo
+say "→ 模型来源 / API" "→ Model provider / API"
+echo "  1) $(t "Anthropic OAuth（claude /login — Claude 订阅，不走路由）" "Anthropic OAuth (claude /login — Claude subscription, no router)")"
+echo "  2) $(t "Anthropic API key（官方 api.anthropic.com，按 token 计费）" "Anthropic API key (official api.anthropic.com, billed per token)")"
+echo "  3) $(t "OpenRouter 本地路由（text→文本模型, 含图→视觉模型）" "OpenRouter via local router (text→text model, images→vision model)")"
+# Default to whatever the existing .env implies.
+prov_default=1
+[ -n "${ANTHROPIC_API_KEY:-}" ] && prov_default=2
+[ -n "${ANTHROPIC_BASE_URL:-}" ] && prov_default=3
+while true; do
+  read -rp "$(t "选择" "Choose") (1/2/3) [$prov_default]: " p_choice
+  case "${p_choice:-$prov_default}" in
+    1) PROVIDER="oauth";  break ;;
+    2) PROVIDER="apikey"; break ;;
+    3) PROVIDER="router"; break ;;
+    *) echo "  ? 1, 2 or 3";;
+  esac
+done
+
+if [ "$PROVIDER" = "apikey" ]; then
+  # --- official Anthropic API key (validated against /v1/models) ---
+  while true; do
+    default="${ANTHROPIC_API_KEY:-}"
+    if [ -n "$default" ]; then
+      read -rp "$(t "Anthropic API key [当前已设，回车保留]" "Anthropic API key [current value kept on Enter]"): " ak
+      ak="${ak:-$default}"
+    else
+      read -rp "$(t "Anthropic API key (sk-ant-...)" "Anthropic API key (sk-ant-...)"): " ak
+    fi
+    [ -z "$ak" ] && { echo "  ? $(t "不能为空" "cannot be empty")"; continue; }
+    resp=$(curl -s https://api.anthropic.com/v1/models \
+      -H "x-api-key: $ak" -H "anthropic-version: 2023-06-01" || echo '{}')
+    if echo "$resp" | grep -qE '"data"|"type":[[:space:]]*"model"'; then
+      echo "  ✓ $(t "key 有效" "key valid")"
+      ANTHROPIC_API_KEY="$ak"; break
+    fi
+    echo "  ✗ $(t "key 无效或网络问题，重试" "invalid key or network issue, retry")"
+  done
+
+elif [ "$PROVIDER" = "router" ]; then
+  # --- OpenRouter API key (validated against /api/v1/key) ---
+  while true; do
+    default="${OPENROUTER_API_KEY:-}"
+    if [ -n "$default" ]; then
+      read -rp "$(t "OpenRouter API key [当前已设，回车保留]" "OpenRouter API key [current value kept on Enter]"): " ork
+      ork="${ork:-$default}"
+    else
+      read -rp "$(t "OpenRouter API key (sk-or-...)" "OpenRouter API key (sk-or-...)"): " ork
+    fi
+    [ -z "$ork" ] && { echo "  ? $(t "不能为空" "cannot be empty")"; continue; }
+    resp=$(curl -s https://openrouter.ai/api/v1/key -H "Authorization: Bearer $ork" || echo '{}')
+    if echo "$resp" | grep -qE '"(label|usage|limit)"'; then
+      echo "  ✓ $(t "key 有效" "key valid")"
+      OPENROUTER_API_KEY="$ork"; break
+    fi
+    echo "  ✗ $(t "key 无效或网络问题，重试" "invalid key or network issue, retry")"
+  done
+
+  # --- router model routing + port ---
+  read -rp "$(t "文本模型" "Text model") [${ROUTER_TEXT_MODEL:-deepseek/deepseek-v4-pro}]: " rtm
+  ROUTER_TEXT_MODEL="${rtm:-${ROUTER_TEXT_MODEL:-deepseek/deepseek-v4-pro}}"
+  read -rp "$(t "视觉模型" "Vision model") [${ROUTER_VISION_MODEL:-xiaomi/mimo-v2.5}]: " rvm
+  ROUTER_VISION_MODEL="${rvm:-${ROUTER_VISION_MODEL:-xiaomi/mimo-v2.5}}"
+  read -rp "$(t "路由端口" "Router port") [${ROUTER_PORT:-8787}]: " rp
+  ROUTER_PORT="${rp:-${ROUTER_PORT:-8787}}"
+
+  # Derive the Anthropic-facing vars. The router rewrites body.model by content,
+  # so the ANTHROPIC_*_MODEL labels below are mostly cosmetic — Claude Code sends
+  # them, the router overrides them. Default each to the text model's short name,
+  # but keep any value the existing .env already set.
+  txt_short="${ROUTER_TEXT_MODEL##*/}"
+  ANTHROPIC_BASE_URL="http://localhost:${ROUTER_PORT}"
+  ANTHROPIC_AUTH_TOKEN="${ANTHROPIC_AUTH_TOKEN:-router-local}"
+  ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-$txt_short}"
+  ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-$txt_short}"
+  ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-$txt_short}"
+  ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-$txt_short}"
+  CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-$txt_short}"
+  echo "  ✓ $(t "路由已配置" "router configured"): $ANTHROPIC_BASE_URL  (text=$ROUTER_TEXT_MODEL, vision=$ROUTER_VISION_MODEL)"
+
+fi
+
 # ============ write .env ============
 echo
 say "→ 写入 .env" "→ Writing .env"
@@ -137,10 +257,48 @@ set_kv() {  # set_kv KEY VALUE  (portable in-place edit via temp file)
     printf '%s=%s\n' "$key" "$val" >> .env
   fi
 }
+unset_kv() {  # unset_kv KEY  — drop a line from .env if present
+  local key="$1"
+  grep -qE "^${key}=" .env || return 0
+  local tmp; tmp=$(mktemp)
+  grep -vE "^${key}=" .env > "$tmp" && mv "$tmp" .env
+}
 set_kv TELEGRAM_BOT_TOKEN "$TELEGRAM_BOT_TOKEN"
 set_kv TELEGRAM_CHAT_ID   "$TELEGRAM_CHAT_ID"
 set_kv VAULT_PATH         "\"$VAULT_PATH\""
 set_kv TZ                 "$TZ"
+
+# API auth vars — written per provider. The ANTHROPIC_BASE_URL/AUTH_TOKEN
+# redirect and the ANTHROPIC_API_KEY are mutually exclusive auth paths, so each
+# mode strips the others to avoid Claude Code picking up a stale credential.
+case "$PROVIDER" in
+  oauth)
+    # Pure subscription login — no key, no redirect in .env.
+    unset_kv ANTHROPIC_BASE_URL
+    unset_kv ANTHROPIC_AUTH_TOKEN
+    unset_kv ANTHROPIC_API_KEY
+    ;;
+  apikey)
+    set_kv ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
+    unset_kv ANTHROPIC_BASE_URL
+    unset_kv ANTHROPIC_AUTH_TOKEN
+    ;;
+  router)
+    set_kv ANTHROPIC_BASE_URL             "$ANTHROPIC_BASE_URL"
+    set_kv ANTHROPIC_AUTH_TOKEN           "$ANTHROPIC_AUTH_TOKEN"
+    set_kv ANTHROPIC_MODEL                "$ANTHROPIC_MODEL"
+    set_kv ANTHROPIC_DEFAULT_OPUS_MODEL   "$ANTHROPIC_DEFAULT_OPUS_MODEL"
+    set_kv ANTHROPIC_DEFAULT_SONNET_MODEL "$ANTHROPIC_DEFAULT_SONNET_MODEL"
+    set_kv ANTHROPIC_DEFAULT_HAIKU_MODEL  "$ANTHROPIC_DEFAULT_HAIKU_MODEL"
+    set_kv CLAUDE_CODE_SUBAGENT_MODEL     "$CLAUDE_CODE_SUBAGENT_MODEL"
+    set_kv OPENROUTER_API_KEY             "$OPENROUTER_API_KEY"
+    set_kv ROUTER_TEXT_MODEL              "$ROUTER_TEXT_MODEL"
+    set_kv ROUTER_VISION_MODEL            "$ROUTER_VISION_MODEL"
+    set_kv ROUTER_PORT                    "$ROUTER_PORT"
+    # A router redirect would shadow an official key — make sure it's gone.
+    unset_kv ANTHROPIC_API_KEY
+    ;;
+esac
 echo "  ✓ .env"
 
 # ============ vault skeleton + persona files ============
@@ -286,8 +444,22 @@ else
   echo "       brew install oven-sh/bun/bun"
   echo "       npm i -g @anthropic-ai/claude-code"
   echo "  2) bun install"
-  echo "  3) claude /login"
-  echo "  4) claude /assistant-loop"
+  case "${PROVIDER:-oauth}" in
+    oauth)  echo "  3) claude /login" ;;
+    apikey) say "  3) （API key 模式：跳过 claude /login — 用 .env 里的 ANTHROPIC_API_KEY）" \
+                "  3) (API-key mode: skip claude /login — uses ANTHROPIC_API_KEY from .env)" ;;
+    router) say "  3) （路由模式：跳过 claude /login — 走 OpenRouter；watchdog 会拉起 anthropic-router）" \
+                "  3) (router mode: skip claude /login — requests go to OpenRouter; watchdog starts anthropic-router)" ;;
+  esac
+  if [ "${PROVIDER:-oauth}" = "oauth" ]; then
+    echo "  4) claude /assistant-loop"
+  else
+    # apikey/router: the REPL itself needs the API vars in its own env, so
+    # source .env first (the watchdog already does this for the daemons).
+    echo "  4) set -a; . ./.env; set +a   &&   claude /assistant-loop"
+    say "     （API key / 路由模式：先 source .env，claude 才能拿到 API 配置）" \
+        "     (API-key / router mode: source .env first so claude picks up the API config)"
+  fi
   say "  5) 给你的 Telegram bot 发一条消息触发 onboarding" "  5) Send your Telegram bot a message to trigger onboarding"
 fi
 
