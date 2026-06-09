@@ -437,27 +437,17 @@ if [ "$MODE" = "docker" ]; then
 else
   echo
   say "→ 本地运行模式" "→ Native host mode"
-  say "  1) 确保已装 bun 和 claude code：" "  1) Ensure bun and claude code are installed:"
+  say "  依赖（如未安装）：" "  Prerequisites (if not installed):"
   echo "       brew install oven-sh/bun/bun"
   echo "       npm i -g @anthropic-ai/claude-code"
-  echo "  2) bun install"
-  case "${PROVIDER:-oauth}" in
-    oauth)  echo "  3) claude /login" ;;
-    apikey) say "  3) （API key 模式：跳过 claude /login — 用 .env 里的 ANTHROPIC_API_KEY）" \
-                "  3) (API-key mode: skip claude /login — uses ANTHROPIC_API_KEY from .env)" ;;
-    router) say "  3) （路由模式：跳过 claude /login — 走 OpenRouter；watchdog 会拉起 anthropic-router）" \
-                "  3) (router mode: skip claude /login — requests go to OpenRouter; watchdog starts anthropic-router)" ;;
-  esac
+  echo "       bun install"
   if [ "${PROVIDER:-oauth}" = "oauth" ]; then
-    echo "  4) claude /assistant-loop"
-  else
-    # apikey/router: the REPL itself needs the API vars in its own env, so
-    # source .env first (the watchdog already does this for the daemons).
-    echo "  4) set -a; . ./.env; set +a   &&   claude /assistant-loop"
-    say "     （API key / 路由模式：先 source .env，claude 才能拿到 API 配置）" \
-        "     (API-key / router mode: source .env first so claude picks up the API config)"
+    say "       claude /login  （首次登录）" "       claude /login  (first time only)"
   fi
-  say "  5) 给你的 Telegram bot 发一条消息触发 onboarding" "  5) Send your Telegram bot a message to trigger onboarding"
+  echo
+  say "  然后直接运行：" "  Then just run:"
+  echo "       ./run_local.sh"
+  say "  并给你的 Telegram bot 发一条消息触发 onboarding" "  Send your Telegram bot a message to trigger onboarding"
 fi
 
 echo
