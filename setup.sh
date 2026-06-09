@@ -308,7 +308,6 @@ say "→ 初始化 vault 骨架" "→ Initializing vault skeleton"
 mkdir -p "$VAULT_PATH/persona/.claude/skills" "$VAULT_PATH/persona/memory" "$VAULT_PATH/raw" "$VAULT_PATH/kb"
 
 [ -f "$VAULT_PATH/STRUCTURE.md" ]        || cp STRUCTURE.example.md "$VAULT_PATH/STRUCTURE.md"
-[ -f "$VAULT_PATH/persona/CLAUDE.md" ]   || cp CLAUDE.example.md    "$VAULT_PATH/persona/CLAUDE.md"
 [ -f "$VAULT_PATH/persona/USER.md" ]     || cp USER.example.md      "$VAULT_PATH/persona/USER.md"
 [ -f "$VAULT_PATH/persona/IDENTITY.md" ] || cp IDENTITY.example.md  "$VAULT_PATH/persona/IDENTITY.md"
 [ -f "$VAULT_PATH/persona/MEMORY.md" ]   || cp MEMORY.example.md    "$VAULT_PATH/persona/MEMORY.md"
@@ -323,8 +322,6 @@ if grep -q "^- \*\*Language:\*\* not set" "$VAULT_PATH/persona/USER.md"; then
   ' "$VAULT_PATH/persona/USER.md" > "$tmp" && mv "$tmp" "$VAULT_PATH/persona/USER.md"
 fi
 
-# Repo-root CLAUDE.md (gitignored real file, synced via pbackup/prestore)
-[ -f CLAUDE.md ] || cp CLAUDE.example.md CLAUDE.md
 
 # kb-impl: simple starter now, or roll your own later
 if [ ! -d "$VAULT_PATH/persona/.claude/skills/kb-impl" ] && [ ! -d ".claude/skills/kb-impl" ]; then
