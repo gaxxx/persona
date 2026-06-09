@@ -282,13 +282,17 @@ if [ "$MODE" = "docker" ]; then
 else
   echo
   say "→ 本地运行模式" "→ Native host mode"
-  say "  1) 确保已装 bun 和 claude code：" "  1) Ensure bun and claude code are installed:"
+  say "  依赖（如未安装）：" "  Prerequisites (if not installed):"
   echo "       brew install oven-sh/bun/bun"
   echo "       npm i -g @anthropic-ai/claude-code"
-  echo "  2) bun install"
-  echo "  3) claude /login"
-  echo "  4) claude /assistant-loop"
-  say "  5) 给你的 Telegram bot 发一条消息触发 onboarding" "  5) Send your Telegram bot a message to trigger onboarding"
+  echo "       bun install"
+  if [ "${PROVIDER:-oauth}" = "oauth" ]; then
+    say "       claude /login  （首次登录）" "       claude /login  (first time only)"
+  fi
+  echo
+  say "  然后直接运行：" "  Then just run:"
+  echo "       ./run_local.sh"
+  say "  并给你的 Telegram bot 发一条消息触发 onboarding" "  Send your Telegram bot a message to trigger onboarding"
 fi
 
 echo
