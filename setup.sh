@@ -269,16 +269,11 @@ if [ "$MODE" = "docker" ]; then
   fi
 
   echo
-  say "→ Docker 启动中（首次会 build，几分钟）" "→ Starting Docker (first build takes a few minutes)"
-  docker compose up -d --build
-  echo
-  say "✓ 容器已启动 — 下一步：" "✓ container running — next steps:"
-  echo "    docker compose exec persona tmux a -t loop"
-  say "      （attach 到容器内的 tmux session — 首次会显示 Claude Code 登录提示，登完就自动进 /assistant-loop）" \
-      "      (attach to the in-container tmux session — first time you'll see Claude Code's login prompt; once logged in it proceeds into /assistant-loop)"
-  say "      退出 tmux：Ctrl-B 然后按 D（detach，保持容器运行）" \
-      "      Detach from tmux without killing it: Ctrl-B then D"
-  say "    然后给你的 Telegram bot 发一条消息触发 onboarding" "    Then send your Telegram bot a message to trigger onboarding"
+  say "✓ Setup 完成 — 运行：" "✓ Setup complete — run:"
+  echo "       ./run_docker.sh"
+  say "  （首次 build 需几分钟；attach 后 Ctrl-B D detach）" \
+      "  (first build takes a few minutes; Ctrl-B D to detach from tmux)"
+  say "  给你的 Telegram bot 发一条消息触发 onboarding" "  Send your Telegram bot a message to trigger onboarding"
 else
   echo
   say "→ 本地运行模式" "→ Native host mode"
