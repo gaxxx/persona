@@ -269,10 +269,11 @@ if [ "$MODE" = "docker" ]; then
   fi
 
   echo
+  say "→ Docker build 中..." "→ Building Docker image..."
+  docker compose build
+  echo
   say "✓ Setup 完成 — 运行：" "✓ Setup complete — run:"
   echo "       ./run_docker.sh"
-  say "  （首次 build 需几分钟；attach 后 Ctrl-B D detach）" \
-      "  (first build takes a few minutes; Ctrl-B D to detach from tmux)"
   say "  给你的 Telegram bot 发一条消息触发 onboarding" "  Send your Telegram bot a message to trigger onboarding"
 else
   echo
