@@ -1,49 +1,53 @@
 #!/usr/bin/env bun
 /**
- * bin/anthropic-router.ts — Anthropic Messages API proxy via OpenRouter.
- * Routes by content: has image → vision model, text-only → text model.
+ * bin/anthropic-router.ts — Split-upstream Anthropic proxy.
+ *
+ * Text-only  → DeepSeek Anthropic-native API — prefix caching, tool use
+ * Image/text → OpenRouter (Anthropic format pass-through) — vision capable
  *
  * Run: bun run bin/anthropic-router.ts
  *
  * Required env vars:
- *   OPENROUTER_API_KEY
- *   ROUTER_TEXT_MODEL   — text model (default: deepseek/deepseek-v4-pro)
- *   ROUTER_VISION_MODEL — vision model (default: xiaomi/mimo-v2.5)
+ *   DEEPSEEK_API_KEY    — DeepSeek API key
+ *   OPENROUTER_API_KEY  — OpenRouter API key (vision path)
+ *   ROUTER_TEXT_MODEL   — DeepSeek model name (default: deepseek-v4-pro)
+ *   ROUTER_VISION_MODEL — Vision model via OpenRouter (default: xiaomi/mimo-v2.5)
  *   ROUTER_PORT         — listen port (default: 8787)
  */
 
-const OPENROUTER = "https://openrouter.ai/api";
+const DEEPSEEK_BASE   = "https://api.deepseek.com/anthropic";
+const OPENROUTER_BASE = "https://openrouter.ai/api";
 
-const API_KEY = process.env.OPENROUTER_API_KEY;
-const TEXT_MODEL = process.env.ROUTER_TEXT_MODEL || "deepseek/deepseek-v4-pro";
+const DEEPSEEK_KEY  = process.env.DEEPSEEK_API_KEY;
+const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
+const TEXT_MODEL   = process.env.ROUTER_TEXT_MODEL   || "deepseek-v4-pro";
 const VISION_MODEL = process.env.ROUTER_VISION_MODEL || "xiaomi/mimo-v2.5";
 const PORT = parseInt(process.env.ROUTER_PORT || "8787", 10);
 
-if (!API_KEY) {
-  console.error("FATAL: OPENROUTER_API_KEY must be set");
-  process.exit(1);
-}
+if (!DEEPSEEK_KEY)   { console.error("FATAL: DEEPSEEK_API_KEY must be set");   process.exit(1); }
+if (!OPENROUTER_KEY) { console.error("FATAL: OPENROUTER_API_KEY must be set"); process.exit(1); }
 
-function hasImage(messages: unknown): boolean {
-  if (!Array.isArray(messages)) return false;
+type AntBlock = { type: string; [k: string]: unknown };
+type AntMsg   = { role: string; content: string | AntBlock[] };
+
+function hasImage(messages: AntMsg[]): boolean {
   for (const msg of messages) {
-    const content = msg?.content;
-    if (typeof content === "string") continue;
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        if (block?.type === "image") return true;
-      }
+    if (!Array.isArray(msg.content)) continue;
+    for (const b of msg.content) {
+      if (b.type === "image") return true;
     }
   }
   return false;
 }
 
-function headers(): Headers {
+function proxyHeaders(req: Request, authKey: string, extra?: Record<string, string>): Headers {
   const h = new Headers();
-  h.set("content-type", "application/json");
-  h.set("authorization", `Bearer ${API_KEY}`);
-  h.set("HTTP-Referer", "http://localhost:8787");
-  h.set("X-Title", "persona-anthropic-router");
+  for (const name of ["content-type", "anthropic-version", "anthropic-beta"]) {
+    const v = req.headers.get(name);
+    if (v) h.set(name, v);
+  }
+  h.set("authorization", `Bearer ${authKey}`);
+  if (extra) for (const [k, v] of Object.entries(extra)) h.set(k, v);
   return h;
 }
 
@@ -51,49 +55,49 @@ const server = Bun.serve({
   port: PORT,
   async fetch(req) {
     const url = new URL(req.url);
-    const path = url.pathname;
-
-    // Read body once — Bun's Request.clone() is unreliable for body streams
     const rawBody = await req.text().catch(() => "");
 
-    // Pass through non-/v1/messages requests
-    if (req.method !== "POST" || path !== "/v1/messages") {
-      const upstream = `${OPENROUTER}${path}${url.search}`;
-      return fetch(upstream, {
+    // Non-messages endpoints → DeepSeek pass-through
+    if (req.method !== "POST" || url.pathname !== "/v1/messages") {
+      return fetch(`${DEEPSEEK_BASE}${url.pathname}${url.search}`, {
         method: req.method,
-        headers: headers(),
+        headers: proxyHeaders(req, DEEPSEEK_KEY!),
         body: rawBody || undefined,
       });
     }
 
-    // --- /v1/messages: check for images, swap model ---
     let body: any;
-    try {
-      body = JSON.parse(rawBody);
-    } catch {
+    try { body = JSON.parse(rawBody); } catch {
       return new Response("invalid JSON", { status: 400 });
     }
 
-    const usesVision = hasImage(body?.messages);
-    body.model = usesVision ? VISION_MODEL : TEXT_MODEL;
+    const vision = hasImage(body?.messages ?? []);
+    body.model = vision ? VISION_MODEL : TEXT_MODEL;
 
     console.log(
-      `[${new Date().toISOString()}] ${usesVision ? "🖼 vision" : "✏ text "} → ${body.model}`,
+      `[${new Date().toISOString()}] ${vision ? "🖼 vision" : "✏ text  "} → ${body.model}${body.stream ? " (stream)" : ""}`,
     );
 
-    const res = await fetch(`${OPENROUTER}/v1/messages`, {
+    const [upstream, key, extra] = vision
+      ? [OPENROUTER_BASE, OPENROUTER_KEY!, { "HTTP-Referer": "http://localhost:8787", "X-Title": "persona-anthropic-router" }]
+      : [DEEPSEEK_BASE,   DEEPSEEK_KEY!,   {}];
+
+    const res = await fetch(`${upstream}/v1/messages`, {
       method: "POST",
-      headers: headers(),
+      headers: proxyHeaders(req, key, extra),
       body: JSON.stringify(body),
     });
+
     if (!res.ok) {
-      const errText = await res.text().catch(() => "");
-      console.error(`[${new Date().toISOString()}] upstream ${res.status}: ${errText.slice(0, 500)}`);
+      const err = await res.text().catch(() => "");
+      console.error(`${vision ? "vision" : "text"} upstream ${res.status}: ${err.slice(0, 400)}`);
+      return new Response(err, { status: res.status, headers: { "content-type": "application/json" } });
     }
+
     return res;
   },
 });
 
-console.log(`router → OpenRouter on http://localhost:${PORT}`);
-console.log(`  text   → ${TEXT_MODEL}`);
-console.log(`  vision → ${VISION_MODEL}`);
+console.log(`router on http://localhost:${PORT}`);
+console.log(`  ✏ text   → DeepSeek Anthropic (${TEXT_MODEL})`);
+console.log(`  🖼 vision → OpenRouter (${VISION_MODEL})`);

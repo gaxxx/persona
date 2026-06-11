@@ -155,8 +155,9 @@ done
 # Three ways to feed Claude Code:
 #   1) OAuth        — `claude /login`, a Claude subscription. No key in .env.
 #   2) Anthropic API key — official api.anthropic.com, billed per token.
-#   3) OpenRouter router — bin/anthropic-router.ts (watchdog-supervised) rewrites
-#      each request's model by content: text → text model, image → vision model.
+#   3) Local router — bin/anthropic-router.ts (watchdog-supervised):
+#        text-only  → DeepSeek native API (OpenAI format, automatic prefix caching)
+#        image/text → OpenRouter Gemini (Anthropic format pass-through, vision capable)
 # Only the router splits vision/text — Anthropic's own models are unified
 # multimodal, so options 1 & 2 use one model for both.
 echo
@@ -199,7 +200,25 @@ if [ "$PROVIDER" = "apikey" ]; then
   done
 
 elif [ "$PROVIDER" = "router" ]; then
-  # --- OpenRouter API key (validated against /api/v1/key) ---
+  # --- DeepSeek API key (text path — validated against /v1/models) ---
+  while true; do
+    default="${DEEPSEEK_API_KEY:-}"
+    if [ -n "$default" ]; then
+      read -rp "$(t "DeepSeek API key [当前已设，回车保留]" "DeepSeek API key [current value kept on Enter]"): " dsk
+      dsk="${dsk:-$default}"
+    else
+      read -rp "$(t "DeepSeek API key (sk-...)" "DeepSeek API key (sk-...)"): " dsk
+    fi
+    [ -z "$dsk" ] && { echo "  ? $(t "不能为空" "cannot be empty")"; continue; }
+    resp=$(curl -s https://api.deepseek.com/v1/models -H "Authorization: Bearer $dsk" || echo '{}')
+    if echo "$resp" | grep -qE '"(data|object)"'; then
+      echo "  ✓ $(t "key 有效" "key valid")"
+      DEEPSEEK_API_KEY="$dsk"; break
+    fi
+    echo "  ✗ $(t "key 无效或网络问题，重试" "invalid key or network issue, retry")"
+  done
+
+  # --- OpenRouter API key (vision path — validated against /api/v1/key) ---
   while true; do
     default="${OPENROUTER_API_KEY:-}"
     if [ -n "$default" ]; then
@@ -218,17 +237,15 @@ elif [ "$PROVIDER" = "router" ]; then
   done
 
   # --- router model routing + port ---
-  read -rp "$(t "文本模型" "Text model") [${ROUTER_TEXT_MODEL:-deepseek/deepseek-v4-pro}]: " rtm
-  ROUTER_TEXT_MODEL="${rtm:-${ROUTER_TEXT_MODEL:-deepseek/deepseek-v4-pro}}"
-  read -rp "$(t "视觉模型" "Vision model") [${ROUTER_VISION_MODEL:-xiaomi/mimo-v2.5}]: " rvm
-  ROUTER_VISION_MODEL="${rvm:-${ROUTER_VISION_MODEL:-xiaomi/mimo-v2.5}}"
+  read -rp "$(t "文本模型 (DeepSeek)" "Text model (DeepSeek)") [${ROUTER_TEXT_MODEL:-deepseek-chat}]: " rtm
+  ROUTER_TEXT_MODEL="${rtm:-${ROUTER_TEXT_MODEL:-deepseek-chat}}"
+  read -rp "$(t "视觉模型 (OpenRouter Gemini)" "Vision model (OpenRouter Gemini)") [${ROUTER_VISION_MODEL:-google/gemini-2.0-flash-001}]: " rvm
+  ROUTER_VISION_MODEL="${rvm:-${ROUTER_VISION_MODEL:-google/gemini-2.0-flash-001}}"
   read -rp "$(t "路由端口" "Router port") [${ROUTER_PORT:-8787}]: " rp
   ROUTER_PORT="${rp:-${ROUTER_PORT:-8787}}"
 
-  # Derive the Anthropic-facing vars. The router rewrites body.model by content,
-  # so the ANTHROPIC_*_MODEL labels below are mostly cosmetic — Claude Code sends
-  # them, the router overrides them. Default each to the text model's short name,
-  # but keep any value the existing .env already set.
+  # Derive the Anthropic-facing vars. The router overrides body.model by content,
+  # so these labels are mostly cosmetic — Claude Code sends them, router ignores them.
   txt_short="${ROUTER_TEXT_MODEL##*/}"
   ANTHROPIC_BASE_URL="http://localhost:${ROUTER_PORT}"
   ANTHROPIC_AUTH_TOKEN="${ANTHROPIC_AUTH_TOKEN:-router-local}"
@@ -237,7 +254,7 @@ elif [ "$PROVIDER" = "router" ]; then
   ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-$txt_short}"
   ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-$txt_short}"
   CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-$txt_short}"
-  echo "  ✓ $(t "路由已配置" "router configured"): $ANTHROPIC_BASE_URL  (text=$ROUTER_TEXT_MODEL, vision=$ROUTER_VISION_MODEL)"
+  echo "  ✓ $(t "路由已配置" "router configured"): $ANTHROPIC_BASE_URL  (text=$ROUTER_TEXT_MODEL → DeepSeek, vision=$ROUTER_VISION_MODEL → OpenRouter)"
 
 fi
 
@@ -291,6 +308,7 @@ case "$PROVIDER" in
     set_kv ANTHROPIC_DEFAULT_SONNET_MODEL "$ANTHROPIC_DEFAULT_SONNET_MODEL"
     set_kv ANTHROPIC_DEFAULT_HAIKU_MODEL  "$ANTHROPIC_DEFAULT_HAIKU_MODEL"
     set_kv CLAUDE_CODE_SUBAGENT_MODEL     "$CLAUDE_CODE_SUBAGENT_MODEL"
+    set_kv DEEPSEEK_API_KEY               "$DEEPSEEK_API_KEY"
     set_kv OPENROUTER_API_KEY             "$OPENROUTER_API_KEY"
     set_kv ROUTER_TEXT_MODEL              "$ROUTER_TEXT_MODEL"
     set_kv ROUTER_VISION_MODEL            "$ROUTER_VISION_MODEL"
