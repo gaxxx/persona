@@ -67,7 +67,8 @@ export async function runClaude(
   const stdout = await new Response(proc.stdout).text();
   if (exitCode !== 0) {
     const stderr = await new Response(proc.stderr).text();
-    throw new Error(`claude exit=${exitCode} stderr=${stderr.slice(-400)}`);
+    // claude -p prints most errors (auth, API) to stdout, not stderr.
+    throw new Error(`claude exit=${exitCode} stderr=${stderr.slice(-400)} stdout=${stdout.trim().slice(-400)}`);
   }
   return stdout.trim();
 }

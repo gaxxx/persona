@@ -8,9 +8,9 @@ the rotation policy or PRIMING.
 
 ```
 rotate when:
-  turns >= MAX_TURNS                                   (25)
-  OR age >= MAX_AGE_MS                                 (4h)
-  OR (cache_read > MAX_CACHE_READ AND turns >= MIN)    (500K AND turns >= 5)
+  turns >= MAX_TURNS                                   (50)
+  OR age >= MAX_AGE_MS                                 (8h)
+  OR (cache_read > MAX_CACHE_READ AND turns >= MIN)    (600K AND turns >= 5)
 ```
 
 The 5-turn floor exists to prevent same-turn rotation loops: a single 200K
@@ -123,15 +123,52 @@ total simplicity.
 
 ---
 
+## Background tasks (concurrent long-running queries)
+
+Turns in the inner claude are strictly serialized, so long work would
+block every later message and die at the 15-min turn timeout. Instead,
+PRIMING teaches the model to offload anything needing >~2 min of tool
+work to a detached one-shot worker:
+
+```
+inner claude:  writes self-contained brief → bun run bin/task-runner.ts start
+               replies "在查了～" immediately            (lane free again)
+worker:        fresh `claude -p` (env-stripped, 30-min default timeout)
+               → tg-sends result + appends to data/conversations/<date>.md
+inner claude:  sees the result via external_writes_since_last_turn next turn
+```
+
+State lives in `data/tasks/<id>.json` (`bin/lib/tasks.ts`). The daemon
+injects `background_tasks: [{id,title,status,minutes_ago}]` (running +
+finished <1h) into every event so the model can answer progress questions
+and dedupe spawns. Stale `running` records (dead pid or past
+timeout+5min) are reaped to `failed` at read time; files >7 days old are
+pruned at daemon spawn.
+
+Cache effect: the main session's prefix and append-only context are
+untouched (every interactive turn stays cache_read-dominated), and fat
+research turns no longer push `cache_read` toward the rotation threshold
+— the warm cache survives *longer*. Workers pay one isolated
+cache_creation and exit.
+
+Design doc: `docs/superpowers/specs/2026-06-11-tg-daemon-background-tasks-design.md`.
+
+---
+
 ## Knobs
 
 All in `bin/tg-daemon.ts`:
 
 ```ts
-const MAX_TURNS = 25;
-const MAX_AGE_MS = 4 * 60 * 60 * 1000;
-const MAX_CACHE_READ = 500_000;
+const MAX_TURNS = 50;
+const MAX_AGE_MS = 8 * 60 * 60 * 1000;
+const MAX_CACHE_READ = 600_000;
 const MIN_TURNS_FOR_CACHE_ROTATION = 5;
 ```
 
-To monitor live: `bun run bin/daemon-stats.ts` (or text the bot `/stats`).
+Background-task knobs in `bin/task-runner.ts` / `bin/lib/tasks.ts`:
+`DEFAULT_TIMEOUT_MIN = 30`, `REAP_GRACE_MIN = 5`,
+`FINISHED_VISIBLE_MIN = 60`, `PRUNE_MAX_AGE_DAYS = 7`.
+
+To monitor live: `bun run bin/daemon-stats.ts` (or text the bot `/stats`);
+`bun run bin/task-runner.ts list` dumps task records.

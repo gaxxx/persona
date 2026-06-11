@@ -17,6 +17,7 @@
 import { getUpdates, downloadFile, sendTyping, sendMessage, type TelegramMessage } from "./lib/telegram";
 import { registerSession } from "./lib/session-registry";
 import { userDateAndHm } from "./lib/user-tz";
+import { tasksForEvent, pruneTasks } from "./lib/tasks";
 import { mkdirSync, existsSync, appendFileSync, statSync, readFileSync, writeFileSync } from "fs";
 import type { Subprocess } from "bun";
 
@@ -62,6 +63,7 @@ if (ALLOWED_CHAT_IDS.size === 0) {
 }
 
 if (!existsSync("data")) mkdirSync("data", { recursive: true });
+try { pruneTasks(); } catch { /* never block startup on task housekeeping */ }
 
 function log(...parts: unknown[]) {
   const line = `[${new Date().toISOString()}] ${parts.map((p) => (typeof p === "string" ? p : JSON.stringify(p))).join(" ")}\n`;
@@ -162,7 +164,7 @@ function writeMcpConfig(): void {
 const PRIMING = `You are a personal assistant running inside a long-lived daemon process. Read CLAUDE.md and <vault>/persona/USER.md to learn who your human is.
 
 Each user turn I send you is one Telegram event in this exact form:
-  [Telegram event] {"chat_id":..., "from":"...", "text":"...", "attachment":{kind,path,name?,mime?}|undefined, "date":"...", "message_id":..., "active_threads":["slug1","slug2",...] (optional)}
+  [Telegram event] {"chat_id":..., "from":"...", "text":"...", "attachment":{kind,path,name?,mime?}|undefined, "date":"...", "message_id":..., "active_threads":["slug1","slug2",...] (optional), "background_tasks":[{id,title,status,minutes_ago},...] (optional)}
 
 If \`attachment\` is set, the user attached a single file. \`kind\` is "photo" / "document" / "sticker". \`path\` is a relative path under data/attachments/. Read it with the Read tool - Read supports images and PDFs natively. Stickers may be webp/tgs/webm; for tgs/webm just acknowledge the sticker (use \`name\` if it's an emoji). \`text\` is caption or a placeholder if none.
 
@@ -214,6 +216,15 @@ THREAD MATCHING (do this BEFORE composing any multi-turn decision reply):
 - If multiple slugs could match and the user wasn't specific → ASK which one ("是说主卫那面镜子还是客厅 WIC 那面？") rather than guess. One short clarifying question beats 30 minutes of misaligned recommendations.
 
 Skip the scratchpad entirely for one-shot answers and trivial messages.
+
+Long-running work — offload it, don't block the lane:
+Turns are strictly serialized: while you work on one message, every other message queues behind you, and the daemon kills any turn at 15 min total / 5 min silent. So when a request needs sustained tool work you estimate at MORE than ~2 minutes (deep research, multi-source web crawling, analyzing a large corpus, big comparisons), do NOT do it inline:
+1. Write a SELF-CONTAINED task brief to a temp file (e.g. /tmp/task-brief.md). The worker is a fresh claude with no memory of this conversation — include the user's request verbatim, the relevant constraints/candidates from the scratchpad thread (copy its ⚠️ lines), and the expected output language/format.
+2. Run \`bun run bin/task-runner.ts start --chat <chat_id> --title <short-slug> --prompt-file /tmp/task-brief.md\` — prints \`started <task-id>\` and returns in under a second. Default timeout 30 min; pass \`--timeout <min>\` for bigger jobs.
+3. Reply to the user RIGHT AWAY in your final text with a short ack + rough ETA ("在查了，大概 10 分钟后给你结果 🔍").
+The worker sends its answer directly to Telegram and appends it to the conversation log — you'll see it as \`external_writes_since_last_turn\` on your next turn; treat it as already answered, do NOT re-answer it.
+The event JSON's \`background_tasks\` lists running tasks plus those finished in the last hour. Use it to answer progress questions ("好了吗?" → "还在查，开始 N 分钟了"). NEVER spawn a duplicate task for an intent that already has a running entry. If 2 tasks are already running, tell the user you'll start theirs once a slot frees up instead of spawning a third.
+Quick work (a single web search, reading one file or photo, a kb query) stays inline — offloading costs ~1 min of fresh-session overhead and loses conversation context.
 
 Do NOT start a Monitor or any watcher - the daemon owns Telegram polling.
 Do NOT call tg-pull.ts.
@@ -835,6 +846,10 @@ async function dispatch(m: TelegramMessage, attachments: PendingAttachment[]): P
   if (externalWrites) event.external_writes_since_last_turn = externalWrites;
   const activeThreads = readActiveThreadSlugs();
   if (activeThreads.length > 0) event.active_threads = activeThreads;
+  try {
+    const bgTasks = tasksForEvent();
+    if (bgTasks.length > 0) event.background_tasks = bgTasks;
+  } catch { /* task registry trouble must never block a turn */ }
   log("-> telegram event", event);
   sendTyping(m.chat.id).catch(() => {});
   const typingTimer = setInterval(() => { sendTyping(m.chat.id).catch(() => {}); }, 4000);
