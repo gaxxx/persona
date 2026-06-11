@@ -96,7 +96,7 @@ The `/kb` skill in this repo is a thin **interface** - it documents the contract
 
 This decouples callers from layout choices. Other skills should call `/kb put <file>` and use the returned path; never hard-code paths. Different users can plug in PARA + Obsidian, Logseq, or plain folders without touching repo code.
 
-A minimal flat-folder example implementation ships at `.claude/skills/kb/examples/minimal/` - copy it as a starting point.
+A minimal example implementation ships at `.claude/skills/kb/examples/minimal/` - an evolving LLM wiki (flat markdown pages + auto-maintained `INDEX.md`; the assistant merges, splits, and re-links pages as it uses them). Copy it as a starting point.
 
 ## Authenticating Claude Code
 

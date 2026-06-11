@@ -41,7 +41,7 @@ If `kb-impl/` is missing on disk, `/kb <subcommand>` (other than the documented 
 
 ## Starting from scratch
 
-A minimal flat-folder example implementation lives at [`examples/minimal/SKILL.md`](examples/minimal/SKILL.md). Copy it into your repo `.claude/skills/` to get started:
+A minimal example implementation lives at [`examples/minimal/SKILL.md`](examples/minimal/SKILL.md) — an **evolving LLM wiki**: flat markdown pages the assistant merges, splits, links, and refreshes as a side effect of normal use, with an auto-maintained `INDEX.md` as the routing layer. Copy it into your repo `.claude/skills/` to get started:
 
 ```bash
 cp -r .claude/skills/kb/examples/minimal .claude/skills/kb-impl

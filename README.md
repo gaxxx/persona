@@ -56,7 +56,7 @@ The interesting design is the layering. Five places you can extend without forki
 
 ### 1. `/kb` — interface vs. implementation
 
-`/kb put`, `/kb query`, `/kb lint` are a fixed contract. The on-disk layout (PARA, Logseq, flat folders, tag-only, …) is entirely up to your `kb-impl/` skill in `<vault>/persona/.claude/skills/kb-impl/`. Other skills call `/kb put <file>` and use the returned path — they never compute kb paths themselves. A minimal starter implementation ships at `.claude/skills/kb/examples/minimal/`.
+`/kb put`, `/kb query`, `/kb lint` are a fixed contract. The on-disk layout (PARA, Logseq, flat folders, tag-only, …) is entirely up to your `kb-impl/` skill in `<vault>/persona/.claude/skills/kb-impl/`. Other skills call `/kb put <file>` and use the returned path — they never compute kb paths themselves. A minimal starter implementation ships at `.claude/skills/kb/examples/minimal/` — an evolving LLM wiki: plain markdown pages the assistant merges, splits, and re-links as it uses them, indexed by one auto-maintained `INDEX.md`.
 
 ### 2. Skills — three layers
 
