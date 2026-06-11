@@ -225,6 +225,7 @@ Turns are strictly serialized: while you work on one message, every other messag
 The worker sends its answer directly to Telegram and appends it to the conversation log — you'll see it as \`external_writes_since_last_turn\` on your next turn; treat it as already answered, do NOT re-answer it.
 The event JSON's \`background_tasks\` lists running tasks plus those finished in the last hour. Use it to answer progress questions ("好了吗?" → "还在查，开始 N 分钟了"). NEVER spawn a duplicate task for an intent that already has a running entry. If 2 tasks are already running, tell the user you'll start theirs once a slot frees up instead of spawning a third.
 Quick work (a single web search, reading one file or photo, a kb query) stays inline — offloading costs ~1 min of fresh-session overhead and loses conversation context.
+Use bin/task-runner.ts for offloads — NOT Bash run_in_background. A run_in_background task wakes you later with a task_notification in an AUTONOMOUS turn (no Telegram event behind it): the daemon auto-sends your final text to the most recently active chat as a last resort, but that can be the WRONG chat if someone else messaged in between, and the task is invisible to background_tasks dedup/progress. If you do end up handling a task_notification turn, deliver the result explicitly with bin/tg-send.ts to the requesting chat_id, then end with brief final text.
 
 Do NOT start a Monitor or any watcher - the daemon owns Telegram polling.
 Do NOT call tg-pull.ts.
@@ -284,6 +285,11 @@ const MIN_TURNS_FOR_CACHE_ROTATION = 5;
 // Primary chat id (used by graceful rate-limit notifications below). First
 // allowed chat id is the one we ping with system notices.
 const PRIMARY_CHAT_ID = [...ALLOWED_CHAT_IDS][0];
+
+// Chat that most recently triggered a dispatch. Orphan results (autonomous
+// turns the harness starts itself, e.g. a background-bash task_notification)
+// have no originating Telegram event, so this is the best delivery target.
+let lastActiveChatId = PRIMARY_CHAT_ID;
 
 // Rate-limit notification de-dup state. Each 5-hour or monthly window has a
 // unique `resetsAt` (unix seconds); we send at most one warning + one
@@ -490,7 +496,35 @@ function spawnClaude(): ClaudeProc {
           const finalText = lastResultText.trim() ? lastResultText : lastAssistantText;
           const r = pendingResolve;
           pendingResolve = null;
-          if (r) r({ result: finalText, sawTgSend: sawTgSendThisTurn });
+          if (r) {
+            r({ result: finalText, sawTgSend: sawTgSendThisTurn });
+          } else if (finalText.trim() && !sawTgSendThisTurn) {
+            // Orphan result: the harness ran an autonomous turn with no
+            // dispatch waiting (e.g. a background-bash task_notification
+            // woke the model after its Telegram turn already ended). The
+            // dispatch()-level auto-send never sees these, so without this
+            // branch the model's final text goes nowhere — a USCIS check
+            // once finished at 01:05 and the user only saw the result after
+            // asking at 01:07. Deliver to the last active chat and log it.
+            const text = finalText;
+            log("orphan result (autonomous turn), auto-sending to", lastActiveChatId);
+            sendMessage(lastActiveChatId, text)
+              .then(() => {
+                const { date, hm } = userDateAndHm();
+                const logPath = `data/conversations/${date}.md`;
+                if (!existsSync("data/conversations")) mkdirSync("data/conversations", { recursive: true });
+                appendFileSync(logPath, `[${hm}] bot: ${text.replace(/\n/g, " | ")}\n`);
+                noteLogConsumed();
+              })
+              .catch((e) => log("orphan auto-send failed:", (e as Error).message));
+          }
+          // Reset per-turn state after EVERY result, not just enqueued ones:
+          // autonomous turns never pass through enqueue()'s turn-start reset,
+          // so a stale sawTgSendThisTurn/lastAssistantText from the previous
+          // dispatch turn would otherwise leak into the orphan check above.
+          sawTgSendThisTurn = false;
+          lastResultText = "";
+          lastAssistantText = "";
         }
       }
     }
@@ -814,6 +848,7 @@ async function dispatch(m: TelegramMessage, attachments: PendingAttachment[]): P
     await handleStatsCommand(m.chat.id);
     return;
   }
+  lastActiveChatId = m.chat.id;
   let replyTo;
   if (m.reply_to_message) {
     const r = m.reply_to_message;
