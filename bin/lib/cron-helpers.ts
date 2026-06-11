@@ -74,13 +74,44 @@ export async function runClaude(
 }
 
 export function extractJson<T>(text: string): T {
-  // Match the outermost { ... } block.
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end < 0 || end <= start) {
-    throw new Error(`No JSON object in output:\n${text.slice(0, 400)}`);
+  // Scan every '{' as a potential JSON start, brace-match it (respecting
+  // string literals + escapes so braces inside values don't fool us), and
+  // return the first balanced block that actually parses. This is robust to
+  // the model wrapping the object in prose/markdown fences on EITHER side —
+  // e.g. a trailing "couldn't read message {id}" note, which the old
+  // indexOf('{')..lastIndexOf('}') slice would swallow and fail to parse.
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "{") continue;
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let j = i; j < text.length; j++) {
+      const ch = text[j];
+      if (esc) {
+        esc = false;
+        continue;
+      }
+      if (inStr) {
+        if (ch === "\\") esc = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') inStr = true;
+      else if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          const candidate = text.slice(i, j + 1);
+          try {
+            return JSON.parse(candidate) as T;
+          } catch {
+            break; // not valid JSON from this start; try the next '{'
+          }
+        }
+      }
+    }
   }
-  return JSON.parse(text.slice(start, end + 1)) as T;
+  throw new Error(`No parseable JSON object in output:\n${text.slice(0, 400)}`);
 }
 
 export async function tgSend(chatId: number | string, message: string): Promise<void> {
