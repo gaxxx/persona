@@ -14,7 +14,7 @@
  *
  * Run:  bun run bin/tg-daemon.ts
  */
-import { getUpdates, downloadFile, sendTyping, sendMessage, type TelegramMessage } from "./lib/telegram";
+import { getUpdates, downloadFile, sendTyping, sendMessage, callApi, type TelegramMessage } from "./lib/telegram";
 import { registerSession } from "./lib/session-registry";
 import { userDateAndHm } from "./lib/user-tz";
 import { tasksForEvent, pruneTasks } from "./lib/tasks";
@@ -839,6 +839,168 @@ async function handleStatsCommand(chatId: number): Promise<void> {
   noteLogConsumed();
 }
 
+// `/quick <question>` — lightweight one-shot. Bypasses the persistent inner
+// claude entirely: spawns a throwaway `claude -p` on a small model with cwd
+// /tmp so the heavy /workspace/CLAUDE.md persona context is NOT loaded. That's
+// the whole point — minimal context, fast, cheap. No conversation log / no
+// scratchpad / no skills; just a direct answer.
+const QUICK_MODEL = "haiku";
+const QUICK_SYSTEM =
+  "You are a quick-answer assistant. Answer directly and concisely in the same language as the question. No preamble, no sign-off, and don't ask follow-up questions unless the question is impossible to answer without one.";
+
+// Sentinel text for the bare-`/quick` ForceReply prompt. Telegram echoes this
+// verbatim in `reply_to_message.text` when the user answers it, so we match on
+// the exact string (restart-safe — no in-memory message-id table needed) to
+// route that reply back into the quick path. Keep it plain (no markdown) so the
+// echoed text matches byte-for-byte.
+const QUICK_PROMPT = "问吧，回复这个走快速通道";
+
+// Bare `/quick` → pop Telegram's reply box focused, so the user just types the
+// question next instead of having to retype `/quick`. The follow-up reply is
+// detected in dispatch() via QUICK_PROMPT and routed here. We re-arm this after
+// EVERY continuous-mode answer so the box stays open until the user dismisses it
+// (swipes the reply away / sends a non-reply message) — see handleQuickCommand.
+async function sendQuickForceReply(chatId: number): Promise<void> {
+  await callApi("sendMessage", {
+    chat_id: chatId,
+    text: QUICK_PROMPT,
+    reply_markup: { force_reply: true, input_field_placeholder: "你的问题…" },
+  });
+}
+
+// Per-chat in-memory transcript of the CURRENT quick session, so continuous-mode
+// follow-ups have context ("它呢?" / "那第二个呢?"). Kept in memory only — no
+// disk file — so /quick still leaves ZERO trace on data/conversations and never
+// leaks into the inner-claude's log read. Reset on a fresh bare `/quick` and
+// whenever a normal (non-quick) message is dispatched for the chat (= the user
+// left quick mode). Bounded to the last few turns to cap token cost.
+const quickSessions = new Map<number, { q: string; a: string }[]>();
+const QUICK_HISTORY_TURNS = 6;
+
+export function resetQuickSession(chatId: number): void {
+  quickSessions.delete(chatId);
+}
+
+// Compose the `-p` prompt: prepend the running session transcript (if any) so
+// the throwaway haiku process can resolve follow-up references.
+function composeQuickPrompt(chatId: number, question: string): string {
+  const hist = quickSessions.get(chatId);
+  if (!hist || hist.length === 0) return question;
+  const lines = hist.map((t) => `Q: ${t.q}\nA: ${t.a}`).join("\n\n");
+  return `以下是本次快速问答会话的历史（供你理解上下文，别重复回答旧问题）：\n${lines}\n\n当前问题：${question}`;
+}
+
+// `continuous` = true for bare-`/quick` sessions (reply-box re-armed after each
+// answer, transcript accumulated). false for inline `/quick <q>` one-shots
+// (single answer, no re-arm, no transcript) — preserves the "一步到位" path.
+async function handleQuickCommand(
+  chatId: number,
+  question: string,
+  continuous: boolean,
+): Promise<void> {
+  log("dispatch: /quick short-circuit");
+  if (!question) {
+    // Bare `/quick` → start a fresh session and pop the reply box.
+    resetQuickSession(chatId);
+    await sendQuickForceReply(chatId);
+    return;
+  }
+  const childEnv = { ...process.env };
+  for (const k of Object.keys(childEnv)) {
+    if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) delete childEnv[k];
+  }
+  const prompt = continuous ? composeQuickPrompt(chatId, question) : question;
+  const proc = Bun.spawn(
+    ["claude", "-p", prompt, "--model", QUICK_MODEL, "--append-system-prompt", QUICK_SYSTEM],
+    { cwd: "/tmp", stdin: "ignore", stdout: "pipe", stderr: "pipe", env: childEnv },
+  );
+  const killer = setTimeout(() => { try { proc.kill(); } catch {} }, 90_000);
+  let answer = "";
+  try {
+    const [out, err] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    answer = out.trim();
+    if (!answer && err.trim()) log("quick stderr:", err.trim());
+  } catch (e) {
+    log("quick spawn error:", (e as Error).message);
+  } finally {
+    clearTimeout(killer);
+  }
+  if (!answer) {
+    await sendMessage(chatId, "😔 quick 没拿到答案，换个问法、或去掉 `/quick` 让我正常处理。");
+    // Still re-arm so a transient failure doesn't silently drop the user out of
+    // quick mode mid-session.
+    if (continuous) await sendQuickForceReply(chatId);
+    return;
+  }
+  await sendMessage(chatId, answer);
+  // Per user pref (2026-06-12): /quick leaves ZERO trace. We deliberately do
+  // NOT write to data/conversations — no `user: /quick …` / `bot (quick): …`
+  // lines — so quick exchanges never pollute the conversation log or leak into
+  // a freshly-spawned inner-claude's first-turn log read. The answer bubble is
+  // the only output. (No noteLogConsumed() either: since we wrote nothing,
+  // any genuine external writes since the last turn should still flow through
+  // to the inner claude naturally.)
+  if (continuous) {
+    // Accumulate the in-memory session transcript (bounded) and re-arm the reply
+    // box so the user can keep firing until they dismiss it.
+    const hist = quickSessions.get(chatId) ?? [];
+    hist.push({ q: question, a: answer });
+    quickSessions.set(chatId, hist.slice(-QUICK_HISTORY_TURNS));
+    await sendQuickForceReply(chatId);
+  }
+}
+
+// `/research <task>` — forces the deterministic background-offload path
+// (bin/task-runner.ts): a detached worker runs the task and pushes the result
+// to Telegram async, exactly like the model's manual offload but routed by the
+// menu so the user can opt in explicitly.
+function slugifyTitle(s: string): string {
+  const base = s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  return base || "research";
+}
+
+async function handleResearchCommand(chatId: number, task: string): Promise<void> {
+  log("dispatch: /research short-circuit");
+  if (!task) {
+    await sendMessage(chatId, "用法：`/research <课题>` —— 后台深度研究，异步给结果。例：`/research 对比 2025 年值得买的双盘位 NAS`");
+    return;
+  }
+  const childEnv = { ...process.env };
+  for (const k of Object.keys(childEnv)) {
+    if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) delete childEnv[k];
+  }
+  const proc = Bun.spawn(
+    ["bun", "run", "bin/task-runner.ts", "start", "--chat", String(chatId), "--title", slugifyTitle(task), "--timeout", "30"],
+    { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: childEnv },
+  );
+  proc.stdin.write(task);
+  proc.stdin.end();
+  const [out, err] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  await proc.exited;
+  if (!out.trim().startsWith("started")) {
+    log("research start failed:", out.trim(), err.trim());
+    await sendMessage(chatId, "😔 后台研究没起来，稍后再试或换个说法。");
+    return;
+  }
+  const taskId = out.trim().replace(/^started\s+/, "");
+  await sendMessage(chatId, "🔍 在后台研究了，大概 10–20 分钟出结果，好了直接发你。");
+  const { date, hm } = userDateAndHm();
+  const logPath = `data/conversations/${date}.md`;
+  if (!existsSync("data/conversations")) mkdirSync("data/conversations", { recursive: true });
+  appendFileSync(
+    logPath,
+    `\n[${hm}] user: /research ${task}\n[${hm}] bot: 🔍 已开后台研究任务 (${taskId})\n`,
+  );
+  noteLogConsumed();
+}
+
 async function dispatch(m: TelegramMessage, attachments: PendingAttachment[]): Promise<void> {
   await rotateIfNeeded();
   // Short-circuit `/stats` (and only `/stats` — no args, no attachments) to
@@ -848,6 +1010,35 @@ async function dispatch(m: TelegramMessage, attachments: PendingAttachment[]): P
     await handleStatsCommand(m.chat.id);
     return;
   }
+  // Mode menu commands (one-shot). `/quick` and `/research` each bypass the
+  // normal full-context inner-claude turn — see handlers above.
+  const cmdText = (m.text ?? "").trim();
+  // Reply to the bare-`/quick` ForceReply prompt → route the answer into the
+  // quick path (NOT the normal full-context turn). Matched by the prompt
+  // sentinel so it survives a daemon restart.
+  if (
+    attachments.length === 0 &&
+    m.reply_to_message?.from?.is_bot === true &&
+    (m.reply_to_message.text ?? "") === QUICK_PROMPT
+  ) {
+    await handleQuickCommand(m.chat.id, cmdText, /*continuous=*/ true);
+    return;
+  }
+  if (attachments.length === 0 && /^\/quick(@\S+)?(\s|$)/.test(cmdText)) {
+    const q = cmdText.replace(/^\/quick(@\S+)?\s*/, "");
+    // Bare `/quick` (q === "") starts a continuous session; `/quick <q>` is a
+    // one-shot. handleQuickCommand branches on whether q is empty.
+    await handleQuickCommand(m.chat.id, q, /*continuous=*/ q === "");
+    return;
+  }
+  if (attachments.length === 0 && /^\/research(@\S+)?(\s|$)/.test(cmdText)) {
+    await handleResearchCommand(m.chat.id, cmdText.replace(/^\/research(@\S+)?\s*/, ""));
+    return;
+  }
+  // Reaching the normal full-context path means the user is NOT replying to a
+  // quick reply-box prompt → they've left quick mode. Drop any stale quick
+  // session transcript so a future `/quick` starts clean.
+  resetQuickSession(m.chat.id);
   lastActiveChatId = m.chat.id;
   let replyTo;
   if (m.reply_to_message) {
@@ -987,6 +1178,23 @@ const stop = async (sig: string) => {
 };
 process.on("SIGINT", () => stop("SIGINT"));
 process.on("SIGTERM", () => stop("SIGTERM"));
+
+// Register the Telegram command menu (the "/" menu next to the input box).
+// Fire-and-forget — a failure here must never block the poll loop.
+(async () => {
+  try {
+    await callApi("setMyCommands", {
+      commands: [
+        { command: "quick", description: "快速问答：跳过上下文直接答（快+省 token）" },
+        { command: "research", description: "后台深度研究，异步返回结果" },
+        { command: "stats", description: "守护进程状态" },
+      ],
+    });
+    log("bot commands registered");
+  } catch (e) {
+    log("setMyCommands failed:", (e as Error).message);
+  }
+})();
 
 while (!stopping) {
   // Stamp heartbeat at the top of each iteration. If getUpdates hangs, or
