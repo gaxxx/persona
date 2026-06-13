@@ -875,7 +875,15 @@ async function sendQuickForceReply(chatId: number): Promise<void> {
 // whenever a normal (non-quick) message is dispatched for the chat (= the user
 // left quick mode). Bounded to the last few turns to cap token cost.
 const quickSessions = new Map<number, { q: string; a: string }[]>();
-const QUICK_HISTORY_TURNS = 6;
+const QUICK_HISTORY_TURNS = 10;
+// Each stored q/a is clipped to this many chars before it joins the replayed
+// transcript — caps prompt token cost no matter how long an answer was. The user
+// still gets the FULL answer bubble; only the copy haiku replays for context is
+// abbreviated. Truncated entries get a visible "…(节选)" marker so the model knows
+// it's an excerpt, not the verbatim original (see composeQuickPrompt header).
+const QUICK_STORE_CHARS = 400;
+const clipForHistory = (s: string): string =>
+  s.length > QUICK_STORE_CHARS ? s.slice(0, QUICK_STORE_CHARS) + " …(节选)" : s;
 
 export function resetQuickSession(chatId: number): void {
   quickSessions.delete(chatId);
@@ -887,12 +895,15 @@ function composeQuickPrompt(chatId: number, question: string): string {
   const hist = quickSessions.get(chatId);
   if (!hist || hist.length === 0) return question;
   const lines = hist.map((t) => `Q: ${t.q}\nA: ${t.a}`).join("\n\n");
-  return `以下是本次快速问答会话的历史（供你理解上下文，别重复回答旧问题）：\n${lines}\n\n当前问题：${question}`;
+  return `以下是本次快速问答会话的历史（供你理解上下文、解析指代，别重复回答旧问题）。注意：带「…(节选)」结尾的条目是为省篇幅截断的摘录，不是完整原文，别照抄或试图续写：\n${lines}\n\n当前问题：${question}`;
 }
 
-// `continuous` = true for bare-`/quick` sessions (reply-box re-armed after each
-// answer, transcript accumulated). false for inline `/quick <q>` one-shots
-// (single answer, no re-arm, no transcript) — preserves the "一步到位" path.
+// `continuous` = true for bare-`/quick` sessions: the reply box is re-armed after
+// each answer so the user can keep firing. Inline `/quick <q>` (continuous=false)
+// answers once and does NOT re-arm the box. BOTH paths now accumulate the
+// in-memory transcript (last QUICK_HISTORY_TURNS) and replay it, so follow-ups
+// resolve context either way. It persists across normal turns and is reset only
+// by a fresh bare `/quick` (resetQuickSession). Disk stays zero-trace regardless.
 async function handleQuickCommand(
   chatId: number,
   question: string,
@@ -909,7 +920,7 @@ async function handleQuickCommand(
   for (const k of Object.keys(childEnv)) {
     if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_")) delete childEnv[k];
   }
-  const prompt = continuous ? composeQuickPrompt(chatId, question) : question;
+  const prompt = composeQuickPrompt(chatId, question);
   const proc = Bun.spawn(
     ["claude", "-p", prompt, "--model", QUICK_MODEL, "--append-system-prompt", QUICK_SYSTEM],
     { cwd: "/tmp", stdin: "ignore", stdout: "pipe", stderr: "pipe", env: childEnv },
@@ -944,14 +955,13 @@ async function handleQuickCommand(
   // the only output. (No noteLogConsumed() either: since we wrote nothing,
   // any genuine external writes since the last turn should still flow through
   // to the inner claude naturally.)
-  if (continuous) {
-    // Accumulate the in-memory session transcript (bounded) and re-arm the reply
-    // box so the user can keep firing until they dismiss it.
-    const hist = quickSessions.get(chatId) ?? [];
-    hist.push({ q: question, a: answer });
-    quickSessions.set(chatId, hist.slice(-QUICK_HISTORY_TURNS));
-    await sendQuickForceReply(chatId);
-  }
+  // Accumulate the in-memory transcript (bounded to QUICK_HISTORY_TURNS) for BOTH
+  // paths so the next /quick — inline or reply-box — can resolve follow-ups.
+  const hist = quickSessions.get(chatId) ?? [];
+  hist.push({ q: clipForHistory(question), a: clipForHistory(answer) });
+  quickSessions.set(chatId, hist.slice(-QUICK_HISTORY_TURNS));
+  // Re-arm the reply box only in continuous (bare-`/quick`) sessions.
+  if (continuous) await sendQuickForceReply(chatId);
 }
 
 // `/research <task>` — forces the deterministic background-offload path
@@ -1035,10 +1045,11 @@ async function dispatch(m: TelegramMessage, attachments: PendingAttachment[]): P
     await handleResearchCommand(m.chat.id, cmdText.replace(/^\/research(@\S+)?\s*/, ""));
     return;
   }
-  // Reaching the normal full-context path means the user is NOT replying to a
-  // quick reply-box prompt → they've left quick mode. Drop any stale quick
-  // session transcript so a future `/quick` starts clean.
-  resetQuickSession(m.chat.id);
+  // Note: we deliberately do NOT reset the quick session here. A normal
+  // full-context message no longer clears the quick transcript (per user pref) —
+  // the bounded (last QUICK_HISTORY_TURNS) in-memory history persists across
+  // normal turns and is only reset by a fresh bare `/quick` (resetQuickSession
+  // above). Still zero-trace on disk.
   lastActiveChatId = m.chat.id;
   let replyTo;
   if (m.reply_to_message) {
