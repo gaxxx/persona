@@ -41,6 +41,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { resolve, dirname } from "path";
 import {
   etIsoNow,
+  etDateAndHm,
   runClaude,
   extractJson,
   tgSend,
@@ -48,6 +49,7 @@ import {
   defaultChatId,
 } from "./lib/cron-helpers";
 import { searchMessageIds, getHeaders, getBody, batchModify } from "./lib/gmail-api";
+import { appendEmailLog, type EmailLogEntry } from "./lib/email-log";
 
 const ROOT = resolve(import.meta.dir, "..");
 const VAULT = process.env.VAULT_PATH;
@@ -361,12 +363,42 @@ async function main(): Promise<void> {
     }
   }
 
-  // Send a digest if there's either important mail to surface OR something was
-  // archived — archiving is never silent (option B: list what was archived).
+  // Append everything we processed this run to the day's email log so the
+  // daily-journal cron can recap the full day without a second Gmail search.
+  // drops are always fresh (archived → never re-seen); keepNew is deduped — so
+  // these lines can't duplicate across runs within a day.
+  const logTs = etIsoNow();
+  const logEntries: EmailLogEntry[] = [
+    ...drops.map((d) => ({
+      ts: logTs,
+      from: d.from,
+      subject: d.subject,
+      cls: "drop" as const,
+      reason: d.reason,
+    })),
+    ...keepNew.map((k) => {
+      const a = items.find((it) => it.id === k.id);
+      return {
+        ts: logTs,
+        from: k.from,
+        subject: k.subject,
+        cls: "keep" as const,
+        gist: a?.gist,
+        suggestion: a?.suggestion,
+      };
+    }),
+  ];
+  appendEmailLog(etDateAndHm().date, logEntries);
+
+  // Only ping Telegram when there's important mail to surface. Per user
+  // (2026-06-15): if a run only archived promos/automated mail, stay SILENT —
+  // no "📭 没有要紧的未读邮件" message. Archiving still happened above; the
+  // daily journal recaps everything (incl. archived) via its own Gmail search.
+  // When we DO send (keepNew>0), the footer still lists what was archived.
   let sent = 0;
-  if (keepNew.length > 0 || drops.length > 0) {
+  if (keepNew.length > 0) {
     const ok = await sendDigest(items, drops);
-    if (ok && keepNew.length > 0) {
+    if (ok) {
       const ts = etIsoNow();
       // Persist every new KEEP id we just surfaced (use the classify list so a
       // dropped/merged id in analyze output can't resurface next run).
