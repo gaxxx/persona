@@ -19,7 +19,8 @@ import { registerSession } from "./lib/session-registry";
 import { userDateAndHm } from "./lib/user-tz";
 import { tasksForEvent, pruneTasks } from "./lib/tasks";
 import { mkdirSync, existsSync, appendFileSync, statSync, readFileSync, writeFileSync } from "fs";
-import type { Subprocess } from "bun";
+import type { ClaudeProc, TurnResult } from "./lib/claude-proc";
+import { spawnInteractiveClaude } from "./lib/interactive-backend";
 
 const OFFSET_FILE = "data/tg-offset.json";
 const LOG_FILE = "data/daemon.log";
@@ -255,20 +256,9 @@ For typing indicators use \`bin/tg-typing.ts\`. If any tg-send / tg-send-photo /
 
 Acknowledge with the single word READY.`;
 
-interface TurnResult {
-  result: string;       // assistant's final text (from result event)
-  sawTgSend: boolean;   // true if any Bash tool_use with bin/tg-send fired this turn
-}
-
-interface ClaudeProc {
-  proc: Subprocess<"pipe", "pipe", "pipe">;
-  enqueue: (text: string) => Promise<TurnResult>;
-  shutdown: () => Promise<void>;
-  isDead: () => boolean;
-  getTurns: () => number;
-  getLastCacheRead: () => number;
-  spawnedAt: number;
-}
+// ClaudeProc / TurnResult are defined in ./lib/claude-proc and shared with the
+// interactive backend. The stream-json `spawnClaude()` below is the default
+// implementation; `spawnInteractiveClaude()` is the opt-in alternate.
 
 // Rotate the inner claude before context grows unbounded — context is held in
 // RAM as KV cache, and macOS will SIGKILL it under memory pressure (we got
@@ -629,6 +619,17 @@ function spawnClaude(): ClaudeProc {
   };
 }
 
+// Backend selection. Default (env unset) is the stream-json `spawnClaude()` —
+// ZERO behaviour change. Set TG_BACKEND=interactive to drive the interactive
+// Claude Code TUI over a pty instead (flat-subscription billing; see
+// bin/lib/interactive-backend.ts and INTERACTIVE-NOTES.md "Phase 1").
+const useInteractive = process.env.TG_BACKEND === "interactive";
+if (useInteractive) {
+  log("TG_BACKEND=interactive — using pty TUI backend (opt-in, flat-plan billing)");
+}
+const makeBackend = (): ClaudeProc =>
+  useInteractive ? spawnInteractiveClaude() : spawnClaude();
+
 // ---- Offset persistence ---------------------------------------------------
 
 let offset = 0;
@@ -642,7 +643,7 @@ async function saveOffset() {
 
 // ---- Main loop ------------------------------------------------------------
 
-let claude = spawnClaude();
+let claude = makeBackend();
 attachExitHandler(claude);
 await claude.enqueue(PRIMING);
 log("priming complete, entering poll loop");
@@ -655,7 +656,7 @@ function attachExitHandler(c: ClaudeProc) {
     if (claude !== c) return;
     if (stopping) { log("skipping auto-respawn: daemon is shutting down"); return; }
     log("auto-respawning after exit");
-    claude = spawnClaude();
+    claude = makeBackend();
     attachExitHandler(claude);
     try {
       await claude.enqueue(PRIMING);
@@ -671,7 +672,7 @@ async function rotateIfNeeded() {
   // (`claude !== c`) makes it skip.
   if (claude.isDead()) {
     log("claude is dead, respawning (main loop)");
-    claude = spawnClaude();
+    claude = makeBackend();
     attachExitHandler(claude);
     await claude.enqueue(PRIMING);
     return;
@@ -700,7 +701,7 @@ async function rotateIfNeeded() {
     } catch (e) {
       log("pre-rotation flush failed (proceeding):", (e as Error).message);
     }
-    claude = spawnClaude();
+    claude = makeBackend();
     attachExitHandler(claude);
     await claude.enqueue(PRIMING);
     old.shutdown().catch((e) => log("old claude shutdown error:", (e as Error).message));
